@@ -1,0 +1,14 @@
+{
+  "name": "zeekay-power",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-25",
+
+  "d1_databases": [
+    {
+      "binding": "zeekay_power_db",
+      "database_name": "zeekay-power-db",
+      "database_id": "e09d467b-2abb-4303-8a08-03e4224101c8",
+      "remote": true
+    }
+  ]
+}
