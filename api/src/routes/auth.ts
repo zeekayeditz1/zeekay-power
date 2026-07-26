@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import { login, register } from "../controllers/auth";
-import { authMiddleware } from "../middleware/auth";
+import { authMiddleware, AuthVariables } from "../middleware/auth";
 
-const auth = new Hono();
+const auth = new Hono<{ Variables: AuthVariables }>();
 
 /*
 |--------------------------------------------------------------------------

@@ -1,6 +1,15 @@
 import { Context, Next } from "hono";
 import { verifyToken, JwtPayload } from "../utils/jwt";
 
+/**
+ * Hono context variables set by authMiddleware.
+ * Type route apps with `new Hono<{ Variables: AuthVariables }>()`
+ * so `c.get("user")` is strongly typed.
+ */
+export type AuthVariables = {
+  user: JwtPayload;
+};
+
 export async function authMiddleware(
   c: Context,
   next: Next

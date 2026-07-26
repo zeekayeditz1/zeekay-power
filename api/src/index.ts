@@ -3,6 +3,7 @@ import { cors } from "hono/cors";
 
 import authRoutes from "./routes/auth";
 import userRoutes from "./routes/user";
+import dashboardRoutes from "./routes/dashboard";
 
 export interface Env {
   zeekay_power_db: D1Database;
@@ -104,6 +105,7 @@ app.get("/api/db-test", async (c) => {
 
 app.route("/api/auth", authRoutes);
 app.route("/api/user", userRoutes);
+app.route("/api", dashboardRoutes);
 
 /*
 |--------------------------------------------------------------------------

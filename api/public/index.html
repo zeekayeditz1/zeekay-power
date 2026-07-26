@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<meta name="theme-color" content="#05070c" />
+<title>Zeekay Power</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E" />
+<style>
+  :root{
+    --bg:#05070c;
+    --bg-2:#0a0e16;
+    --panel:rgba(19,26,40,0.55);
+    --panel-solid:#111725;
+    --stroke:rgba(255,255,255,0.08);
+    --stroke-strong:rgba(255,255,255,0.16);
+    --txt:#eaf0fb;
+    --muted:#8794ad;
+    --faint:#5b6780;
+    --accent:#37f5b5;      /* electric mint */
+    --accent-2:#39b8ff;    /* cyan */
+    --amber:#ffb547;
+    --red:#ff5c72;
+    --violet:#a479ff;
+    --shadow:0 24px 60px -20px rgba(0,0,0,0.75);
+    --radius:20px;
+    --font:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:var(--font);
+    color:var(--txt);
+    background:
+      radial-gradient(1200px 700px at 15% -10%, rgba(57,184,255,0.14), transparent 60%),
+      radial-gradient(1000px 600px at 100% 0%, rgba(55,245,181,0.10), transparent 55%),
+      radial-gradient(900px 700px at 50% 120%, rgba(164,121,255,0.10), transparent 60%),
+      var(--bg);
+    -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+    min-height:100%;
+  }
+  a{color:inherit}
+  button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+  .mono{font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+
+  /* ---------- LOGIN ---------- */
+  #login{
+    position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    padding:24px;z-index:40;
+  }
+  .login-card{
+    width:100%;max-width:400px;
+    background:linear-gradient(180deg,rgba(20,27,42,0.85),rgba(11,15,24,0.9));
+    border:1px solid var(--stroke);
+    border-radius:24px;
+    padding:40px 34px 34px;
+    box-shadow:var(--shadow);
+    backdrop-filter:blur(18px);
+    -webkit-backdrop-filter:blur(18px);
+    position:relative;overflow:hidden;
+  }
+  .login-card::before{
+    content:"";position:absolute;top:0;left:0;right:0;height:1px;
+    background:linear-gradient(90deg,transparent,var(--accent),transparent);opacity:.6;
+  }
+  .brand{display:flex;align-items:center;gap:12px;margin-bottom:26px}
+  .brand .logo{
+    width:44px;height:44px;border-radius:13px;flex:none;
+    display:grid;place-items:center;font-size:22px;
+    background:radial-gradient(circle at 30% 25%,rgba(55,245,181,.35),rgba(57,184,255,.15));
+    border:1px solid var(--stroke-strong);
+    box-shadow:inset 0 0 22px rgba(55,245,181,.25),0 8px 20px -8px rgba(55,245,181,.4);
+  }
+  .brand h1{font-size:19px;font-weight:700;letter-spacing:.14em}
+  .brand p{font-size:11.5px;color:var(--muted);letter-spacing:.22em;text-transform:uppercase;margin-top:2px}
+  .field{margin-bottom:16px}
+  .field label{display:block;font-size:11.5px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;text-transform:uppercase}
+  .field input{
+    width:100%;padding:13px 15px;font-size:15px;color:var(--txt);
+    background:rgba(255,255,255,0.04);
+    border:1px solid var(--stroke);border-radius:13px;outline:none;
+    transition:border-color .18s,box-shadow .18s,background .18s;
+  }
+  .field input:focus{
+    border-color:rgba(55,245,181,.55);
+    box-shadow:0 0 0 3px rgba(55,245,181,.14);
+    background:rgba(255,255,255,0.06);
+  }
+  .btn{
+    width:100%;padding:14px;border-radius:13px;font-size:15px;font-weight:600;letter-spacing:.02em;
+    color:#04110c;background:linear-gradient(180deg,#4dffc4,#22d59b);
+    box-shadow:0 12px 30px -12px rgba(55,245,181,.7);
+    transition:transform .12s,filter .18s,opacity .18s;
+    display:flex;align-items:center;justify-content:center;gap:10px;
+  }
+  .btn:hover{filter:brightness(1.05)}
+  .btn:active{transform:translateY(1px)}
+  .btn[disabled]{opacity:.6;cursor:default;filter:grayscale(.2)}
+  .login-msg{min-height:18px;margin-top:14px;font-size:13px;text-align:center;color:var(--red)}
+  .login-foot{margin-top:22px;text-align:center;font-size:11px;color:var(--faint);letter-spacing:.05em}
+
+  .spinner{width:16px;height:16px;border-radius:50%;border:2px solid rgba(4,17,12,.35);border-top-color:#04110c;animation:spin .7s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* ---------- APP ---------- */
+  #app{display:none;max-width:1240px;margin:0 auto;padding:22px 22px 60px}
+  .topbar{
+    display:flex;align-items:center;gap:16px;
+    padding:14px 18px;margin-bottom:22px;
+    background:var(--panel);border:1px solid var(--stroke);border-radius:16px;
+    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+    position:sticky;top:14px;z-index:20;
+  }
+  .topbar .logo{
+    width:38px;height:38px;border-radius:11px;flex:none;display:grid;place-items:center;font-size:19px;
+    background:radial-gradient(circle at 30% 25%,rgba(55,245,181,.35),rgba(57,184,255,.15));
+    border:1px solid var(--stroke-strong);
+  }
+  .topbar .title{font-weight:700;letter-spacing:.13em;font-size:15px}
+  .topbar .title small{display:block;font-size:10px;color:var(--muted);letter-spacing:.22em;font-weight:500}
+  .status-pill{
+    display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);
+    padding:7px 13px;border-radius:999px;border:1px solid var(--stroke);background:rgba(255,255,255,.03);
+  }
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--faint);box-shadow:0 0 0 0 rgba(55,245,181,.5)}
+  .dot.live{background:var(--accent);animation:pulse 1.8s infinite}
+  .dot.warn{background:var(--amber)}
+  .dot.err{background:var(--red)}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(55,245,181,.45)}70%{box-shadow:0 0 0 7px rgba(55,245,181,0)}100%{box-shadow:0 0 0 0 rgba(55,245,181,0)}}
+  .spacer{flex:1}
+  .icon-btn{
+    display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);
+    padding:9px 14px;border-radius:11px;border:1px solid var(--stroke);background:rgba(255,255,255,.03);
+    transition:color .15s,border-color .15s,background .15s;
+  }
+  .icon-btn:hover{color:var(--txt);border-color:var(--stroke-strong);background:rgba(255,255,255,.06)}
+
+  .grid{display:grid;gap:16px}
+  .kpis{grid-template-columns:repeat(4,1fr);margin-bottom:16px}
+  .cols{grid-template-columns:1.55fr 1fr}
+  @media(max-width:900px){.kpis{grid-template-columns:repeat(2,1fr)}.cols{grid-template-columns:1fr}}
+  @media(max-width:520px){.kpis{grid-template-columns:1fr}}
+
+  .card{
+    background:var(--panel);border:1px solid var(--stroke);border-radius:var(--radius);
+    padding:18px 20px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+    position:relative;overflow:hidden;
+  }
+  .card h3{font-size:11.5px;font-weight:600;color:var(--muted);letter-spacing:.14em;text-transform:uppercase;margin-bottom:14px;display:flex;align-items:center;gap:9px}
+  .kpi .big{font-size:34px;font-weight:700;letter-spacing:-.01em;line-height:1}
+  .kpi .unit{font-size:15px;color:var(--muted);font-weight:500;margin-left:4px}
+  .kpi .sub{font-size:12px;color:var(--faint);margin-top:8px}
+  .kpi .icon{
+    position:absolute;top:16px;right:16px;width:36px;height:36px;border-radius:11px;display:grid;place-items:center;font-size:17px;
+    border:1px solid var(--stroke);
+  }
+  .i-batt{background:rgba(55,245,181,.10);color:var(--accent)}
+  .i-solar{background:rgba(255,181,71,.12);color:var(--amber)}
+  .i-load{background:rgba(164,121,255,.12);color:var(--violet)}
+  .i-grid{background:rgba(57,184,255,.12);color:var(--accent-2)}
+
+  /* battery bar */
+  .bar{height:7px;border-radius:6px;background:rgba(255,255,255,.07);overflow:hidden;margin-top:12px}
+  .bar > i{display:block;height:100%;border-radius:6px;background:linear-gradient(90deg,#22d59b,#4dffc4);transition:width .6s cubic-bezier(.2,.8,.2,1)}
+
+  /* chart */
+  .chart-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px}
+  .chart-head .now{font-size:26px;font-weight:700}
+  .chart-head .now small{font-size:13px;color:var(--muted);font-weight:500}
+  canvas{width:100%;display:block}
+
+  /* relay control */
+  .relay-row{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:16px}
+  .relay-row .label{font-size:14px;font-weight:600}
+  .relay-row .desc{font-size:11.5px;color:var(--faint);margin-top:3px;max-width:210px}
+  .toggle{
+    --w:64px;width:var(--w);height:34px;border-radius:999px;border:1px solid var(--stroke-strong);
+    background:rgba(255,255,255,.05);position:relative;transition:background .25s,border-color .25s;flex:none;
+  }
+  .toggle > i{
+    position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:50%;
+    background:#c7d0e0;transition:left .25s cubic-bezier(.3,1.4,.6,1),background .25s;
+    box-shadow:0 3px 8px rgba(0,0,0,.4);
+  }
+  .toggle.on{background:linear-gradient(90deg,rgba(34,213,155,.5),rgba(77,255,196,.7));border-color:rgba(55,245,181,.6)}
+  .toggle.on > i{left:calc(var(--w) - 29px);background:#04110c}
+  .toggle.busy{opacity:.6;pointer-events:none}
+  .chip{display:inline-flex;align-items:center;gap:7px;font-size:12px;padding:6px 11px;border-radius:9px;border:1px solid var(--stroke);color:var(--muted)}
+  .chip b{color:var(--txt);font-weight:600}
+  .ghost-btn{width:100%;margin-top:4px;padding:12px;border-radius:12px;border:1px solid var(--stroke-strong);background:rgba(255,255,255,.03);font-size:13.5px;font-weight:600;color:var(--txt);transition:background .15s,border-color .15s}
+  .ghost-btn:hover{background:rgba(255,255,255,.07)}
+  .ghost-btn[disabled]{opacity:.5;cursor:default}
+
+  /* measurements */
+  .meas{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  @media(max-width:520px){.meas{grid-template-columns:repeat(2,1fr)}}
+  .meas .m{padding:13px;border-radius:13px;background:rgba(255,255,255,.03);border:1px solid var(--stroke)}
+  .meas .m .k{font-size:10.5px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase}
+  .meas .m .v{font-size:20px;font-weight:700;margin-top:6px}
+  .meas .m .v small{font-size:11px;color:var(--faint);font-weight:500}
+
+  /* events */
+  .events{display:flex;flex-direction:column;gap:2px;max-height:280px;overflow:auto}
+  .ev{display:flex;gap:12px;align-items:flex-start;padding:11px 4px;border-bottom:1px solid var(--stroke)}
+  .ev:last-child{border-bottom:none}
+  .ev .ei{width:30px;height:30px;border-radius:9px;flex:none;display:grid;place-items:center;font-size:14px;border:1px solid var(--stroke)}
+  .ev .et{font-size:13.5px;font-weight:500}
+  .ev .em{font-size:11.5px;color:var(--faint);margin-top:2px}
+  .ev .ez{margin-left:auto;font-size:11px;color:var(--faint);white-space:nowrap}
+
+  .seg{display:inline-flex;background:rgba(255,255,255,.04);border:1px solid var(--stroke);border-radius:10px;padding:3px}
+  .seg button{font-size:12px;padding:6px 12px;border-radius:8px;color:var(--muted)}
+  .seg button.active{background:rgba(255,255,255,.08);color:var(--txt)}
+
+  .status-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+  .sg{display:flex;align-items:center;gap:11px;padding:13px;border-radius:13px;background:rgba(255,255,255,.03);border:1px solid var(--stroke)}
+  .sg .sgi{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-size:16px;flex:none}
+  .sg .sgk{font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+  .sg .sgv{font-size:15px;font-weight:700;margin-top:2px}
+  .ok{color:var(--accent)}.off{color:var(--faint)}.hot{color:var(--amber)}.bad{color:var(--red)}
+
+  .toast{
+    position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);
+    background:var(--panel-solid);border:1px solid var(--stroke-strong);border-radius:13px;
+    padding:12px 18px;font-size:13.5px;box-shadow:var(--shadow);opacity:0;pointer-events:none;
+    transition:opacity .25s,transform .25s;z-index:60;display:flex;align-items:center;gap:10px;
+  }
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .skl{background:linear-gradient(90deg,rgba(255,255,255,.05),rgba(255,255,255,.11),rgba(255,255,255,.05));background-size:200% 100%;animation:shim 1.3s infinite;border-radius:6px;color:transparent!important}
+  @keyframes shim{to{background-position:-200% 0}}
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<section id="login">
+  <form class="login-card" id="loginForm" autocomplete="on">
+    <div class="brand">
+      <div class="logo">⚡</div>
+      <div>
+        <h1>ZEEKAY POWER</h1>
+        <p>Control Center</p>
+      </div>
+    </div>
+    <div class="field">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" inputmode="email" autocomplete="username" placeholder="you@zeekayeditz.com" required />
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" placeholder="••••••••" required />
+    </div>
+    <button class="btn" id="loginBtn" type="submit"><span>Sign in</span></button>
+    <div class="login-msg" id="loginMsg"></div>
+    <div class="login-foot">Secured · power.zeekayeditz.com</div>
+  </form>
+</section>
+
+<!-- APP -->
+<main id="app">
+  <div class="topbar">
+    <div class="logo">⚡</div>
+    <div class="title">ZEEKAY POWER<small>CONTROL CENTER</small></div>
+    <div class="spacer"></div>
+    <span class="status-pill"><span class="dot" id="connDot"></span><span id="connTxt">connecting…</span></span>
+    <button class="icon-btn" id="refreshBtn" title="Refresh now">↻ Refresh</button>
+    <button class="icon-btn" id="logoutBtn" title="Sign out">Sign out</button>
+  </div>
+
+  <!-- KPIs -->
+  <div class="grid kpis">
+    <div class="card kpi">
+      <div class="icon i-batt">🔋</div>
+      <h3>Battery</h3>
+      <div><span class="big mono" id="kBatt">--</span><span class="unit">%</span></div>
+      <div class="bar"><i id="battBar" style="width:0%"></i></div>
+      <div class="sub" id="kBattSub">from pack voltage</div>
+    </div>
+    <div class="card kpi">
+      <div class="icon i-solar">☀️</div>
+      <h3>Solar</h3>
+      <div><span class="big mono" id="kSolar">--</span><span class="unit">W</span></div>
+      <div class="sub" id="kSolarSub">PV generation</div>
+    </div>
+    <div class="card kpi">
+      <div class="icon i-load">🏠</div>
+      <h3>Load</h3>
+      <div><span class="big mono" id="kLoad">--</span><span class="unit">W</span></div>
+      <div class="sub" id="kLoadSub">house consumption</div>
+    </div>
+    <div class="card kpi">
+      <div class="icon i-grid">🔌</div>
+      <h3>WAPDA · Grid</h3>
+      <div><span class="big" id="kGrid">--</span></div>
+      <div class="sub" id="kGridSub">mains status</div>
+    </div>
+  </div>
+
+  <!-- MAIN COLS -->
+  <div class="grid cols">
+    <!-- left -->
+    <div class="grid" style="gap:16px">
+      <div class="card">
+        <div class="chart-head">
+          <div>
+            <h3 style="margin-bottom:6px">State of charge</h3>
+            <div class="now"><span class="mono" id="socNow">--</span><small>% now</small></div>
+          </div>
+          <div class="seg" id="rangeSeg">
+            <button data-h="6">6h</button>
+            <button data-h="12">12h</button>
+            <button data-h="24" class="active">24h</button>
+          </div>
+        </div>
+        <canvas id="socChart" height="220"></canvas>
+      </div>
+
+      <div class="card">
+        <h3>Measurements</h3>
+        <div class="meas">
+          <div class="m"><div class="k">Voltage</div><div class="v mono"><span id="mV">--</span> <small>V</small></div></div>
+          <div class="m"><div class="k">Current</div><div class="v mono"><span id="mI">--</span> <small>A</small></div></div>
+          <div class="m"><div class="k">Power</div><div class="v mono"><span id="mP">--</span> <small>W</small></div></div>
+          <div class="m"><div class="k">Energy today</div><div class="v mono"><span id="mE">--</span> <small>kWh</small></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- right -->
+    <div class="grid" style="gap:16px">
+      <div class="card">
+        <h3>WAPDA Control</h3>
+        <div class="relay-row">
+          <div>
+            <div class="label">Mains relay</div>
+            <div class="desc">Switching talks to Tuya directly. Automatic control keeps running in the cloud whether this page is open or not.</div>
+          </div>
+          <div class="toggle" id="relayToggle" role="switch" aria-checked="false" tabindex="0"><i></i></div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+          <span class="chip">Relay <b id="relayState">—</b></span>
+          <span class="chip">Mode <b id="relayMode">auto</b></span>
+          <span class="chip">Updated <b id="relayUpd">—</b></span>
+        </div>
+        <button class="ghost-btn" id="pollBtn">⟳ Force poll now</button>
+      </div>
+
+      <div class="card">
+        <h3>System status</h3>
+        <div class="status-grid">
+          <div class="sg"><div class="sgi i-grid">🔌</div><div><div class="sgk">WAPDA</div><div class="sgv" id="sgWapda">—</div></div></div>
+          <div class="sg"><div class="sgi i-batt">🔗</div><div><div class="sgk">Relay</div><div class="sgv" id="sgRelay">—</div></div></div>
+          <div class="sg"><div class="sgi i-solar">☀️</div><div><div class="sgk">Solar</div><div class="sgv" id="sgSolar">—</div></div></div>
+          <div class="sg"><div class="sgi i-load">🏠</div><div><div class="sgk">Load</div><div class="sgv" id="sgLoad">—</div></div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Recent events</h3>
+        <div class="events" id="events"></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+(function(){
+  const API = ""; // same-origin
+  const TOKEN_KEY = "zk_power_token";
+  const $ = (id)=>document.getElementById(id);
+
+  let token = null;
+  try { token = localStorage.getItem(TOKEN_KEY); } catch(e){}
+  let pollTimer = null;
+  let chartRange = 24;
+  let lastStatus = null;
+
+  /* ---------------- helpers ---------------- */
+  function toast(msg, kind){
+    const t = $("toast");
+    t.innerHTML = (kind==="err"?"⚠️ ":kind==="ok"?"✅ ":"")+msg;
+    t.classList.add("show");
+    clearTimeout(t._t); t._t = setTimeout(()=>t.classList.remove("show"), 2600);
+  }
+  function fmt(n, d){
+    if(n===null||n===undefined||isNaN(n)) return "--";
+    return Number(n).toLocaleString(undefined,{minimumFractionDigits:d||0,maximumFractionDigits:d||0});
+  }
+  function ago(ts){
+    if(!ts) return "—";
+    const s = Math.max(0,(Date.now()-new Date(ts).getTime())/1000);
+    if(s<60) return Math.floor(s)+"s ago";
+    if(s<3600) return Math.floor(s/60)+"m ago";
+    if(s<86400) return Math.floor(s/3600)+"h ago";
+    return Math.floor(s/86400)+"d ago";
+  }
+  async function api(path, opts){
+    opts = opts || {};
+    const headers = Object.assign({"Content-Type":"application/json"}, opts.headers||{});
+    if(token) headers["Authorization"] = "Bearer "+token;
+    const res = await fetch(API+path, Object.assign({}, opts, {headers}));
+    let body = null;
+    const ct = res.headers.get("content-type")||"";
+    if(ct.includes("application/json")){ try{ body = await res.json(); }catch(e){} }
+    if(res.status===401){ handleLogout(true); throw new Error("unauthorized"); }
+    if(!res.ok){ throw new Error((body&&(body.message||body.error))||("HTTP "+res.status)); }
+    return body;
+  }
+
+  /* ---------------- auth ---------------- */
+  function showApp(){ $("login").style.display="none"; $("app").style.display="block"; }
+  function showLogin(){ $("app").style.display="none"; $("login").style.display="flex"; $("password").value=""; }
+
+  function handleLogout(silent){
+    token=null;
+    try{ localStorage.removeItem(TOKEN_KEY); }catch(e){}
+    if(pollTimer){ clearInterval(pollTimer); pollTimer=null; }
+    showLogin();
+    if(!silent) toast("Signed out","ok");
+  }
+
+  $("loginForm").addEventListener("submit", async (e)=>{
+    e.preventDefault();
+    const btn=$("loginBtn"), msg=$("loginMsg");
+    msg.textContent="";
+    btn.disabled=true; btn.innerHTML='<span class="spinner"></span>';
+    try{
+      const email=$("email").value.trim(), password=$("password").value;
+      const r = await fetch(API+"/api/auth/login",{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({email,password})
+      });
+      const data = await r.json().catch(()=>({}));
+      if(!r.ok || !data.token){ throw new Error(data.message||data.error||"Invalid email or password"); }
+      token = data.token;
+      try{ localStorage.setItem(TOKEN_KEY, token); }catch(e){}
+      showApp(); boot();
+      toast("Welcome back"+(data.user&&data.user.name?", "+data.user.name.split(" ")[0]:""),"ok");
+    }catch(err){
+      msg.textContent = err.message || "Login failed";
+    }finally{
+      btn.disabled=false; btn.innerHTML="<span>Sign in</span>";
+    }
+  });
+  $("logoutBtn").addEventListener("click", ()=>handleLogout(false));
+
+  /* ---------------- connection state ---------------- */
+  function setConn(state){
+    const dot=$("connDot"), txt=$("connTxt");
+    dot.className="dot "+(state==="live"?"live":state==="warn"?"warn":state==="err"?"err":"");
+    txt.textContent = state==="live"?"live":state==="warn"?"reconnecting…":state==="err"?"offline":"connecting…";
+  }
+
+  /* ---------------- render ---------------- */
+  function statusWord(el, on, labels){
+    const [good,bad] = labels;
+    el.textContent = on?good:bad;
+    el.className = "sgv "+(on?"ok":"off");
+  }
+  function render(s){
+    lastStatus = s;
+    // KPIs
+    $("kBatt").textContent = fmt(s.battery_soc,0);
+    $("battBar").style.width = Math.max(0,Math.min(100,s.battery_soc||0))+"%";
+    $("kBattSub").textContent = s.battery_voltage!=null?("pack "+fmt(s.battery_voltage,1)+" V"):"from pack voltage";
+    $("kSolar").textContent = fmt(s.solar_power,0);
+    $("kLoad").textContent = fmt(s.load_power,0);
+    $("kGrid").textContent = s.wapda?"ON":"OFF";
+    $("kGrid").className = "big "+(s.wapda?"ok":"bad");
+    $("kGridSub").textContent = s.wapda?"mains available":"running on battery";
+    $("socNow").textContent = fmt(s.battery_soc,0);
+
+    // measurements
+    $("mV").textContent = fmt(s.voltage,1);
+    $("mI").textContent = fmt(s.current,1);
+    $("mP").textContent = fmt(s.power,0);
+    $("mE").textContent = fmt(s.energy_today,2);
+
+    // relay
+    const on = !!s.relay_state;
+    const tg = $("relayToggle");
+    tg.classList.toggle("on", on);
+    tg.classList.remove("busy");
+    tg.setAttribute("aria-checked", on?"true":"false");
+    $("relayState").textContent = on?"ON":"OFF";
+    $("relayMode").textContent = s.mode||"auto";
+    $("relayUpd").textContent = ago(s.updated_at);
+
+    // status grid
+    statusWord($("sgWapda"), s.wapda, ["Available","Down"]);
+    statusWord($("sgRelay"), on, ["Closed","Open"]);
+    statusWord($("sgSolar"), (s.solar_power||0)>5, ["Generating","Idle"]);
+    statusWord($("sgLoad"), (s.load_power||0)>5, ["Active","Idle"]);
+
+    setConn("live");
+  }
+
+  /* ---------------- SOC chart (vanilla canvas) ---------------- */
+  function drawChart(points){
+    const cv=$("socChart");
+    const dpr=window.devicePixelRatio||1;
+    const w=cv.clientWidth, h=220;
+    cv.width=w*dpr; cv.height=h*dpr; cv.style.height=h+"px";
+    const ctx=cv.getContext("2d"); ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.clearRect(0,0,w,h);
+    if(!points||!points.length){ return; }
+    const padL=34,padR=10,padT=14,padB=22;
+    const iw=w-padL-padR, ih=h-padT-padB;
+    const minY=0,maxY=100;
+    const xAt=(i)=>padL+ (points.length===1?iw/2: iw*i/(points.length-1));
+    const yAt=(v)=>padT+ ih*(1-(v-minY)/(maxY-minY));
+    // grid + labels
+    ctx.font="10px "+getComputedStyle(document.body).fontFamily;
+    ctx.textBaseline="middle";
+    [0,25,50,75,100].forEach(g=>{
+      const y=yAt(g);
+      ctx.strokeStyle="rgba(255,255,255,0.05)"; ctx.lineWidth=1;
+      ctx.beginPath();ctx.moveTo(padL,y);ctx.lineTo(w-padR,y);ctx.stroke();
+      ctx.fillStyle="rgba(135,148,173,0.7)"; ctx.textAlign="right";
+      ctx.fillText(g, padL-8, y);
+    });
+    // area fill
+    const grad=ctx.createLinearGradient(0,padT,0,padT+ih);
+    grad.addColorStop(0,"rgba(55,245,181,0.30)");
+    grad.addColorStop(1,"rgba(55,245,181,0.0)");
+    ctx.beginPath();
+    points.forEach((p,i)=>{const x=xAt(i),y=yAt(p.soc); i?ctx.lineTo(x,y):ctx.moveTo(x,y);});
+    ctx.lineTo(xAt(points.length-1),padT+ih); ctx.lineTo(xAt(0),padT+ih); ctx.closePath();
+    ctx.fillStyle=grad; ctx.fill();
+    // line
+    ctx.beginPath();
+    points.forEach((p,i)=>{const x=xAt(i),y=yAt(p.soc); i?ctx.lineTo(x,y):ctx.moveTo(x,y);});
+    ctx.strokeStyle="#37f5b5"; ctx.lineWidth=2.2; ctx.lineJoin="round"; ctx.stroke();
+    // last point
+    const lx=xAt(points.length-1), ly=yAt(points[points.length-1].soc);
+    ctx.beginPath();ctx.arc(lx,ly,4,0,7); ctx.fillStyle="#37f5b5"; ctx.fill();
+    ctx.beginPath();ctx.arc(lx,ly,7,0,7); ctx.strokeStyle="rgba(55,245,181,0.4)"; ctx.lineWidth=2; ctx.stroke();
+    // x labels (first & last)
+    ctx.fillStyle="rgba(135,148,173,0.7)"; ctx.textAlign="left"; ctx.textBaseline="alphabetic";
+    if(points[0].t){ ctx.fillText(new Date(points[0].t).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}), padL, h-6); }
+    ctx.textAlign="right";
+    if(points[points.length-1].t){ ctx.fillText("now", w-padR, h-6); }
+  }
+
+  async function loadHistory(){
+    try{
+      const r = await api("/api/history?hours="+chartRange);
+      drawChart((r&&r.points)||[]);
+    }catch(e){ /* keep prior chart */ }
+  }
+
+  /* ---------------- events ---------------- */
+  const EV_ICON = {relay:"🔗",wapda:"🔌",solar:"☀️",battery:"🔋",system:"⚙️",alert:"⚠️"};
+  function renderEvents(list){
+    const box=$("events");
+    if(!list||!list.length){ box.innerHTML='<div class="em" style="padding:14px 4px">No recent events.</div>'; return; }
+    box.innerHTML = list.map(e=>`
+      <div class="ev">
+        <div class="ei">${EV_ICON[e.type]||"•"}</div>
+        <div>
+          <div class="et">${escapeHtml(e.title||e.type||"event")}</div>
+          ${e.detail?`<div class="em">${escapeHtml(e.detail)}</div>`:""}
+        </div>
+        <div class="ez">${ago(e.at)}</div>
+      </div>`).join("");
+  }
+  function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+  async function loadEvents(){
+    try{ const r=await api("/api/events?limit=8"); renderEvents((r&&r.events)||[]); }catch(e){}
+  }
+
+  /* ---------------- status polling ---------------- */
+  async function loadStatus(){
+    try{
+      const r = await api("/api/status");
+      render(r&&r.status?r.status:r);
+    }catch(e){
+      if(e.message!=="unauthorized"){ setConn("warn"); }
+    }
+  }
+
+  function skeleton(){
+    ["kBatt","kSolar","kLoad","socNow","mV","mI","mP","mE"].forEach(id=>{ $(id).classList.add("skl"); $(id).textContent="0000"; });
+    setTimeout(()=>["kBatt","kSolar","kLoad","socNow","mV","mI","mP","mE"].forEach(id=>$(id).classList.remove("skl")),1200);
+  }
+
+  async function boot(){
+    setConn("connecting");
+    skeleton();
+    await Promise.all([loadStatus(), loadHistory(), loadEvents()]);
+    if(pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(()=>{ loadStatus(); loadEvents(); }, 15000);
+    setInterval(()=>{ if(document.getElementById("app").style.display!=="none") loadHistory(); }, 60000);
+  }
+
+  /* ---------------- controls ---------------- */
+  async function setRelay(next){
+    const tg=$("relayToggle");
+    tg.classList.add("busy");
+    try{
+      await api("/api/relay",{method:"POST",body:JSON.stringify({state:next?1:0})});
+      toast("WAPDA relay turned "+(next?"ON":"OFF"),"ok");
+      await loadStatus(); loadEvents();
+    }catch(e){
+      toast(e.message||"Relay command failed","err");
+      if(lastStatus) render(lastStatus);
+    }finally{ tg.classList.remove("busy"); }
+  }
+  $("relayToggle").addEventListener("click", ()=>{
+    if(!lastStatus) return;
+    setRelay(!lastStatus.relay_state);
+  });
+  $("relayToggle").addEventListener("keydown",(e)=>{ if(e.key===" "||e.key==="Enter"){e.preventDefault(); if(lastStatus) setRelay(!lastStatus.relay_state);} });
+
+  $("pollBtn").addEventListener("click", async ()=>{
+    const b=$("pollBtn"); b.disabled=true; const o=b.textContent; b.textContent="⟳ Polling…";
+    try{ await api("/api/poll",{method:"POST"}); await Promise.all([loadStatus(),loadEvents(),loadHistory()]); toast("Polled devices","ok"); }
+    catch(e){ toast(e.message||"Poll failed","err"); }
+    finally{ b.disabled=false; b.textContent=o; }
+  });
+
+  $("refreshBtn").addEventListener("click", ()=>{ loadStatus(); loadHistory(); loadEvents(); });
+
+  $("rangeSeg").addEventListener("click",(e)=>{
+    const btn=e.target.closest("button"); if(!btn) return;
+    [...e.currentTarget.children].forEach(b=>b.classList.remove("active"));
+    btn.classList.add("active"); chartRange=+btn.dataset.h; loadHistory();
+  });
+
+  let rz; window.addEventListener("resize", ()=>{ clearTimeout(rz); rz=setTimeout(loadHistory,150); });
+
+  /* ---------------- init ---------------- */
+  if(token){ showApp(); boot(); } else { showLogin(); }
+})();
+</script>
+</body>
+</html>

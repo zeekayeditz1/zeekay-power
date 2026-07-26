@@ -2,6 +2,11 @@
   "name": "zeekay-power",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-25",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "assets": {
+    "directory": "./public"
+  },
 
   "d1_databases": [
     {

@@ -1,8 +1,8 @@
 import { Hono } from "hono";
-import { authMiddleware } from "../middleware/auth";
+import { authMiddleware, AuthVariables } from "../middleware/auth";
 import { getUserById } from "../services/userService";
 
-const user = new Hono();
+const user = new Hono<{ Variables: AuthVariables }>();
 
 user.use("*", authMiddleware);
 

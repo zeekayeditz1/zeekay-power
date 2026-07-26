@@ -5,6 +5,7 @@ import {
   createUser,
   emailExists,
   getUserByEmail,
+  countUsers,
 } from "../services/userService";
 
 import { verifyPassword } from "../utils/hash";
@@ -28,6 +29,20 @@ export async function register(c: Context) {
     const data = registerSchema.parse(body);
 
     const env = c.env as any;
+
+    // Bootstrap-only: registration is open only until the first account
+    // exists. This keeps the private control dashboard closed to public
+    // sign-ups once it has been set up.
+    const existingUsers = await countUsers(env);
+    if (existingUsers > 0) {
+      return c.json(
+        {
+          success: false,
+          message: "Registration is closed",
+        },
+        403
+      );
+    }
 
     const exists = await emailExists(
       env,

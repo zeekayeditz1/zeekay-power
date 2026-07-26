@@ -61,3 +61,23 @@ CREATE TABLE IF NOT EXISTS sessions (
 
     FOREIGN KEY(user_id) REFERENCES users(id)
 );
+
+-- ==========================
+-- APP STATE (key/value: relay_state, mode, ...)
+-- ==========================
+CREATE TABLE IF NOT EXISTS app_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ==========================
+-- APP EVENTS (dashboard activity log)
+-- ==========================
+CREATE TABLE IF NOT EXISTS app_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    detail TEXT,
+    at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

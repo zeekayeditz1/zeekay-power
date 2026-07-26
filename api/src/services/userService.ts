@@ -75,6 +75,14 @@ export async function emailExists(
   return user !== null;
 }
 
+export async function countUsers(env: Env): Promise<number> {
+  const row = await env.zeekay_power_db
+    .prepare(`SELECT COUNT(*) AS n FROM users`)
+    .first<{ n: number }>();
+
+  return row?.n ?? 0;
+}
+
 export async function createUser(
   env: Env,
   data: CreateUserInput
