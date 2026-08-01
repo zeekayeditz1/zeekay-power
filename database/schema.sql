@@ -81,3 +81,12 @@ CREATE TABLE IF NOT EXISTS app_events (
     detail TEXT,
     at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+-- ==========================
+-- BATTERY HISTORY (SOC engine)
+-- ==========================
+CREATE TABLE IF NOT EXISTS battery_history (
+    ts INTEGER PRIMARY KEY,          -- unix seconds
+    v REAL, p REAL,                  -- battery volts, DC watts (+charge/-discharge)
+    soc_blended REAL, soc_v REAL, soc_cc REAL,
+    bms_soc REAL, anchored INTEGER
+);

@@ -34,6 +34,14 @@ export async function ensureTables(env: StoreEnv): Promise<void> {
         at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       )`
     ),
+    env.zeekay_power_db.prepare(
+      `CREATE TABLE IF NOT EXISTS battery_history (
+        ts INTEGER PRIMARY KEY,
+        v REAL, p REAL,
+        soc_blended REAL, soc_v REAL, soc_cc REAL,
+        bms_soc REAL, anchored INTEGER
+      )`
+    ),
   ]);
 
   // Seed a couple of events the first time so the panel isn't empty.
