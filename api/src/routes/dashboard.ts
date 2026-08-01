@@ -7,6 +7,7 @@ import {
   logEvent,
   getEvents,
 } from "../services/dashboardStore";
+import { runSocTick } from "../services/socPipeline";
 
 /*
 |--------------------------------------------------------------------------
@@ -54,6 +55,34 @@ async function snapshot(env: any) {
   const relay = parseInt(await getState(env, "relay_state", "1"), 10) === 1 ? 1 : 0;
   const mode = await getState(env, "mode", "auto");
 
+  // Prefer real live data written by the SOC pipeline cron. Fall back to demo.
+  try {
+    const raw = await getState(env, "live_status", "");
+    if (raw) {
+      const live = JSON.parse(raw);
+      const wapda = (live.grid_power ?? 0) > 5 || (live.ac_voltage ?? 0) > 50;
+      return {
+        battery_soc: live.battery_soc,
+        battery_voltage: live.battery_voltage,
+        soc_voltage: live.soc_voltage,
+        soc_coulomb: live.soc_coulomb,
+        bms_soc: live.bms_soc,
+        solar_power: Math.round(live.solar_power || 0),
+        load_power: Math.round(live.load_power || 0),
+        voltage: Math.round(live.ac_voltage || 0),
+        current: live.ac_voltage ? +(((live.load_power || 0) / live.ac_voltage).toFixed(1)) : 0,
+        power: Math.round(live.load_power || 0),
+        grid_power: Math.round(live.grid_power || 0),
+        energy_today: live.energy_today ?? null,
+        wapda,
+        relay_state: relay,
+        mode,
+        source: "live",
+        updated_at: live.updated_at,
+      };
+    }
+  } catch {}
+
   const soc = socAt(now);
   const solar = solarAt(now);
   const load = Math.round(620 + 380 * Math.abs(Math.sin(now.getTime() / 120000)));
@@ -91,12 +120,24 @@ dashboard.get("/history", async (c) => {
   const hours = Math.max(1, Math.min(48, parseInt(c.req.query("hours") || "24", 10) || 24));
   const stepMin = hours <= 6 ? 15 : hours <= 12 ? 30 : 60;
 
+  const since = Math.floor(Date.now() / 1000) - hours * 3600;
+  try {
+    const res: any = await (c.env as any).zeekay_power_db
+      .prepare(`SELECT ts, soc_blended FROM battery_history WHERE ts >= ? ORDER BY ts ASC`)
+      .bind(since)
+      .all();
+    const rows = res?.results || [];
+    if (rows.length) {
+      const points = rows.map((r: any) => ({ t: new Date(r.ts * 1000).toISOString(), soc: Math.round(r.soc_blended) }));
+      return c.json({ success: true, hours, points });
+    }
+  } catch {}
+
   const points: { t: string; soc: number }[] = [];
   for (let t = hours * 60; t >= 0; t -= stepMin) {
     const d = new Date(Date.now() - t * 60000);
     points.push({ t: d.toISOString(), soc: socAt(d) });
   }
-
   return c.json({ success: true, hours, points });
 });
 
@@ -141,7 +182,7 @@ dashboard.post("/relay", async (c) => {
 
 /* ---------- POST /api/poll ---------- */
 dashboard.post("/poll", async (c) => {
-  // TODO(tuya)/TODO(sems): refresh live device + inverter data on demand.
+  try { await runSocTick(c.env as any); } catch (e: any) { console.error("poll tick:", e?.message); }
   await logEvent(
     c.env as any,
     "system",

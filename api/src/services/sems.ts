@@ -1,73 +1,83 @@
+/*
+| Real SEMS+ client (verified live against hk.semsportal.com, 2026-07-29).
+| Handles regional CrossLogin (plain password), token caching in D1 app_state,
+| and normalizes the monitor payload into the fields the dashboard + SOC need.
+*/
+import { getState, setState } from "./dashboardStore";
+
 export interface Env {
   SEMS_EMAIL: string;
   SEMS_PASSWORD: string;
+  SEMS_STATION_ID: string;
+  zeekay_power_db: D1Database;
 }
 
-function ensureConfig(env: Env) {
-  if (!env.SEMS_EMAIL || !env.SEMS_PASSWORD) {
-    throw new Error("SEMS_EMAIL and SEMS_PASSWORD must be set in environment");
-  }
+const BASE = "https://hk.semsportal.com";
+const okCode = (c: any) => String(c) === "0";
+const numOf = (x: any) => { const n = parseFloat(String(x)); return Number.isFinite(n) ? n : null; };
+
+async function crossLogin(env: Env) {
+  const r = await fetch(`${BASE}/api/v2/Common/CrossLogin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json",
+      Token: JSON.stringify({ version: "v2.1.0", client: "web", language: "en" }) },
+    body: JSON.stringify({ account: env.SEMS_EMAIL, pwd: env.SEMS_PASSWORD }),
+  });
+  const d: any = await r.json();
+  if (!okCode(d.code) || !d.data) throw new Error(`SEMS login failed: code=${d.code} msg=${d.msg}`);
+  const tok = { ...d.data, exp: Date.now() + 50 * 60000 };
+  await setState(env as any, "sems_token", JSON.stringify(tok));
+  return tok;
 }
-
-/**
- * Build a Basic Authorization header value from the configured SEMS credentials.
- */
-export function buildBasicAuthHeader(env: Env): string {
-  ensureConfig(env);
-
-  const creds = `${env.SEMS_EMAIL}:${env.SEMS_PASSWORD}`;
-  const token = typeof Buffer !== "undefined"
-    ? Buffer.from(creds).toString("base64")
-    : btoa(creds);
-
-  return `Basic ${token}`;
-}
-
-/**
- * Minimal fetch wrapper that injects SEMS auth header. The caller is expected
- * to provide a full URL. This keeps the service small and easy to integrate
- * with whatever SEMS endpoint the project needs.
- */
-export async function semsFetch(env: Env, url: string, init: RequestInit = {}) {
-  ensureConfig(env);
-
-  const headers = new Headers(init.headers ?? {});
-  if (!headers.has("Authorization")) {
-    headers.set("Authorization", buildBasicAuthHeader(env));
-  }
-
-  const res = await fetch(url, { ...init, headers });
-
-  const contentType = res.headers.get("content-type") ?? "";
-  if (contentType.includes("application/json")) {
-    const json = await res.json();
-    if (!res.ok) throw new Error(JSON.stringify(json));
-    return json;
-  }
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || `SEMS request failed: ${res.status}`);
-  }
-
-  return await res.text();
-}
-
-/**
- * Lightweight health check helper. If no external SEMS endpoint is known,
- * this simply validates config and returns a small object indicating readiness.
- */
-export function health(env: Env) {
+async function getToken(env: Env) {
   try {
-    ensureConfig(env);
-    return { ready: true, email: env.SEMS_EMAIL };
-  } catch (err: any) {
-    return { ready: false, error: err.message };
-  }
+    const raw = await getState(env as any, "sems_token", "");
+    if (raw) { const t = JSON.parse(raw); if (t && t.exp > Date.now()) return t; }
+  } catch {}
+  return crossLogin(env);
+}
+async function monitorCall(tok: any, station: string) {
+  const r = await fetch(`${BASE}/api/v3/PowerStation/GetMonitorDetailByPowerstationId`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Token: JSON.stringify(tok) },
+    body: JSON.stringify({ powerStationId: station }),
+  });
+  return r.json() as Promise<any>;
 }
 
-export default {
-  buildBasicAuthHeader,
-  semsFetch,
-  health,
-};
+export interface SemsSnapshot {
+  v: number | null; p_chg: number | null; ts: number; bms_soc: number | null;
+  solar_power: number | null; load_power: number | null; grid_power: number | null;
+  ac_voltage: number | null;
+  energy_today: number | null;
+}
+
+/** Pull one live reading. p_chg: POSITIVE = charging (SEMS reports negative for charge). */
+export async function fetchSemsSnapshot(env: Env): Promise<SemsSnapshot> {
+  let tok = await getToken(env);
+  let d = await monitorCall(tok, env.SEMS_STATION_ID);
+  if (String(d.code) === "100002" || String(d.code) === "100001") { tok = await crossLogin(env); d = await monitorCall(tok, env.SEMS_STATION_ID); }
+  if (!okCode(d.code)) throw new Error(`SEMS monitor failed: code=${d.code} msg=${d.msg}`);
+
+  const data = d.data || {};
+  const inv = data.inverter?.[0] || {};
+  const full = inv.invert_full || {};
+  const pf = data.powerflow || {};
+  const power = numOf(full.total_pbattery ?? inv.battery_power);
+  return {
+    v: numOf(full.vbattery1),
+    p_chg: power == null ? null : -power,
+    ts: Math.floor(Date.now() / 1000),
+    bms_soc: numOf(full.soc ?? inv.soc ?? pf.soc),
+    solar_power: numOf(pf.pv),
+    load_power: numOf(pf.load),
+    grid_power: numOf(pf.grid),
+    ac_voltage: numOf(full.output_voltage ?? inv.output_voltage),
+    energy_today: numOf(inv.eday),
+  };
+}
+
+export function health(env: Env) {
+  return { ready: !!(env.SEMS_EMAIL && env.SEMS_PASSWORD && env.SEMS_STATION_ID) };
+}
+export default { fetchSemsSnapshot, health };

@@ -4,6 +4,7 @@ import { cors } from "hono/cors";
 import authRoutes from "./routes/auth";
 import userRoutes from "./routes/user";
 import dashboardRoutes from "./routes/dashboard";
+import { runSocTick } from "./services/socPipeline";
 
 export interface Env {
   zeekay_power_db: D1Database;
@@ -18,6 +19,7 @@ export interface Env {
 
   SEMS_EMAIL: string;
   SEMS_PASSWORD: string;
+  SEMS_STATION_ID: string;
 }
 
 const app = new Hono<{ Bindings: Env }>();
@@ -142,4 +144,14 @@ app.onError((err, c) => {
   );
 });
 
-export default app;
+export default {
+  fetch: app.fetch,
+  async scheduled(_event: any, env: Env, ctx: any) {
+    ctx.waitUntil(
+      (async () => {
+        try { await runSocTick(env as any); }
+        catch (e: any) { console.error("soc tick error:", e?.message); }
+      })()
+    );
+  },
+};
