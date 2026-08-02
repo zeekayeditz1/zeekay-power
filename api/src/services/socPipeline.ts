@@ -14,7 +14,7 @@ const r2 = (x: number | null | undefined) => (x == null ? null : Math.round(x * 
 // Pakistan is UTC+5 (no DST) — local calendar day for "today" counters & the billing-cycle grouping.
 function localDay(ts_s: number) { return new Date((ts_s + 5 * 3600) * 1000).toISOString().slice(0, 10); }
 
-const AUTOSHIFT_DEFAULT = { enabled: false, threshold_v: 45.8, duration_min: 60 };
+const AUTOSHIFT_DEFAULT = { enabled: false, threshold_v: 45.8, duration_min: 60, pv_stop_w: 200 };
 
 export async function runSocTick(env: any) {
   await ensureTables(env);
@@ -82,23 +82,40 @@ export async function runSocTick(env: any) {
   let asState: any = { active: false, trigger_ts: null, until_ts: null, trigger_voltage: null };
   try { const raw = await getState(env, "autoshift_state", ""); if (raw) asState = { ...asState, ...JSON.parse(raw) }; } catch {}
 
+  // Fixed nighttime trigger window: 18:00 (6 PM) through 05:59 (just before 6 AM), Pakistan local time.
+  const localHour = new Date((snap.ts + 5 * 3600) * 1000).getUTCHours();
+  const inNightWindow = localHour >= 18 || localHour < 6;
+
   if (cfg.enabled && tuya) {
     const nowTs = snap.ts;
     if (!asState.active) {
-      if (snap.v <= cfg.threshold_v && !tuya.relay_on) {
+      if (inNightWindow && snap.v <= cfg.threshold_v && !tuya.relay_on) {
         try {
           await setTuyaRelay(env, true);
           asState = { active: true, trigger_ts: nowTs, until_ts: nowTs + cfg.duration_min * 60, trigger_voltage: snap.v };
           await logEvent(env, "autoshift", "Auto-shift: WAPDA turned ON",
-            `Battery at ${snap.v.toFixed(1)} V (\u2264 ${cfg.threshold_v} V threshold) \u2014 will hold for ${cfg.duration_min} min`);
+            `Battery at ${snap.v.toFixed(1)} V (\u2264 ${cfg.threshold_v} V threshold, ${localHour}:00 local) \u2014 will hold up to ${cfg.duration_min} min or until PV \u2265 ${cfg.pv_stop_w} W`);
         } catch (e: any) { console.error("autoshift ON failed:", e?.message); }
       }
-    } else if (nowTs >= (asState.until_ts || 0)) {
-      try {
-        await setTuyaRelay(env, false);
-        await logEvent(env, "autoshift", "Auto-shift: WAPDA turned OFF", `${cfg.duration_min} min window elapsed \u2014 reverted to auto`);
-      } catch (e: any) { console.error("autoshift OFF failed:", e?.message); }
-      asState = { active: false, trigger_ts: null, until_ts: null, trigger_voltage: null };
+    } else {
+      // While holding: PV recovering to the stop threshold ends the hold immediately,
+      // even if the fixed duration hasn't elapsed yet. Otherwise, the duration itself
+      // is the fallback cutoff (e.g. an overcast morning with little PV recovery).
+      const pvNow = snap.solar_power ?? 0;
+      if (pvNow >= cfg.pv_stop_w) {
+        try {
+          await setTuyaRelay(env, false);
+          await logEvent(env, "autoshift", "Auto-shift: WAPDA turned OFF",
+            `PV reached ${Math.round(pvNow)} W (\u2265 ${cfg.pv_stop_w} W stop threshold) \u2014 ended early`);
+        } catch (e: any) { console.error("autoshift OFF (pv) failed:", e?.message); }
+        asState = { active: false, trigger_ts: null, until_ts: null, trigger_voltage: null };
+      } else if (nowTs >= (asState.until_ts || 0)) {
+        try {
+          await setTuyaRelay(env, false);
+          await logEvent(env, "autoshift", "Auto-shift: WAPDA turned OFF", `${cfg.duration_min} min window elapsed \u2014 reverted to auto`);
+        } catch (e: any) { console.error("autoshift OFF failed:", e?.message); }
+        asState = { active: false, trigger_ts: null, until_ts: null, trigger_voltage: null };
+      }
     }
     await setState(env, "autoshift_state", JSON.stringify(asState));
   }

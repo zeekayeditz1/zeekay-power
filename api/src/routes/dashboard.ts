@@ -238,7 +238,7 @@ dashboard.post("/poll", async (c) => {
 });
 
 /* ---------- Auto-shift-to-WAPDA settings (voltage-triggered) ---------- */
-const AUTOSHIFT_DEFAULT = { enabled: false, threshold_v: 45.8, duration_min: 60 };
+const AUTOSHIFT_DEFAULT = { enabled: false, threshold_v: 45.8, duration_min: 60, pv_stop_w: 200 };
 
 dashboard.get("/autoshift", async (c) => {
   const env = c.env as any;
@@ -251,6 +251,8 @@ dashboard.get("/autoshift", async (c) => {
     enabled: cfg.enabled,
     threshold_v: cfg.threshold_v,
     duration_min: cfg.duration_min,
+    pv_stop_w: cfg.pv_stop_w,
+    window: "18:00\u201306:00 (Pakistan time) \u2014 fixed, not adjustable here",
     active: state.active,
     trigger_voltage: state.trigger_voltage,
     until: state.until_ts ? new Date(state.until_ts * 1000).toISOString() : null,
@@ -276,10 +278,15 @@ dashboard.post("/autoshift", async (c) => {
     if (!Number.isInteger(m) || m < 5 || m > 360) return c.json({ success: false, error: "duration_min must be an integer between 5 and 360" }, 400);
     cfg.duration_min = m;
   }
+  if (body.pv_stop_w != null) {
+    const w = Number(body.pv_stop_w);
+    if (!Number.isFinite(w) || w < 50 || w > 2000) return c.json({ success: false, error: "pv_stop_w must be between 50 and 2000 W" }, 400);
+    cfg.pv_stop_w = Math.round(w);
+  }
 
   await setState(env, "autoshift_cfg", JSON.stringify(cfg));
   await logEvent(env, "autoshift", `Auto-shift settings updated`,
-    `${cfg.enabled ? "Enabled" : "Disabled"} · trigger ≤ ${cfg.threshold_v} V · hold ${cfg.duration_min} min`);
+    `${cfg.enabled ? "Enabled" : "Disabled"} \u00b7 trigger \u2264 ${cfg.threshold_v} V (18:00\u201306:00 only) \u00b7 hold up to ${cfg.duration_min} min \u00b7 stop early at PV \u2265 ${cfg.pv_stop_w} W`);
 
   return c.json({ success: true, ...cfg });
 });
