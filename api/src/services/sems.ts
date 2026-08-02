@@ -55,6 +55,9 @@ export interface SemsSnapshot {
   battery_current: number | null;
   frequency: number | null;
   meter_total_kwh: number | null;
+  wapda_today_kwh: number | null;
+  charge_day_kwh: number | null;
+  discharge_day_kwh: number | null;
   pv_power: number | null;
 }
 
@@ -84,7 +87,12 @@ export async function fetchSemsSnapshot(env: Env): Promise<SemsSnapshot> {
     load_current: numOf(full.iload),
     battery_current: numOf(full.ibattery1),
     frequency: numOf(full.fac1),
-    meter_total_kwh: numOf(full.eday_buy ?? full.etotal_buy),
+    // real inverter counters — fixes prior null (was reading full.eday_buy, which
+    // doesn't exist; the real fields live on `inv`, snake_case, and on `full` as camelCase)
+    meter_total_kwh: numOf(inv.etotal_buy ?? full.eTotalBuy),
+    wapda_today_kwh: numOf(inv.eday_buy ?? full.eDayBuy),
+    charge_day_kwh: numOf(full.eChargeDay),
+    discharge_day_kwh: numOf(full.eDischargeDay),
     pv_power: numOf(pf.pv ?? full.pv_power),
   };
 }
