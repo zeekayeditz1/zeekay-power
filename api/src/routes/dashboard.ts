@@ -102,8 +102,11 @@ async function snapshot(env: any) {
         total_charge_kwh: s.total_charge_kwh,
         discharge_today_kwh: s.discharge_today_kwh,
         breaker_online: s.breaker_online,
+        autoshift_phase: s.autoshift_phase,
         autoshift_active: s.autoshift_active,
+        autoshift_charging: s.autoshift_charging,
         autoshift_until: s.autoshift_until,
+        autoshift_trigger_voltage: s.autoshift_trigger_voltage,
         updated_at: s.updated_at,
       };
     }
@@ -140,8 +143,11 @@ async function snapshot(env: any) {
     total_charge_kwh: 0,
     wapda_today_kwh: 0,
     discharge_today_kwh: 0,
+    autoshift_phase: "idle",
     autoshift_active: false,
+    autoshift_charging: false,
     autoshift_until: null,
+    autoshift_trigger_voltage: null,
     updated_at: now.toISOString(),
   };
 }
@@ -214,17 +220,18 @@ dashboard.post("/relay", async (c) => {
     await setState(c.env as any, "tuya_status", JSON.stringify(ts));
   } catch { /* read-back best-effort */ }
 
-  // If auto-shift was mid-hold and the user just manually turned WAPDA off,
-  // clear the hold state so /api/status stops reporting a stale "active until"
-  // — the manual override takes precedence over the automation's own timer.
+  // If auto-shift was mid-cycle (waiting for grid, or actively charging) and
+  // the user just manually turned WAPDA off, clear the state so /api/status
+  // stops reporting a stale phase — manual override takes precedence.
   if (next === 0) {
     try {
       const raw = await getState(c.env as any, "autoshift_state", "");
       if (raw) {
         const as = JSON.parse(raw);
-        if (as && as.active) {
-          await setState(c.env as any, "autoshift_state", JSON.stringify({ active: false, trigger_ts: null, until_ts: null, trigger_voltage: null }));
-          await logEvent(c.env as any, "autoshift", "Auto-shift hold ended", "Manually overridden from dashboard before its timer/PV condition finished");
+        const wasMidCycle = as && (as.phase ? as.phase !== "idle" : as.active);
+        if (wasMidCycle) {
+          await setState(c.env as any, "autoshift_state", JSON.stringify({ phase: "idle", trigger_ts: null, trigger_voltage: null, charge_start_ts: null, until_ts: null }));
+          await logEvent(c.env as any, "autoshift", "Auto-shift cycle ended", "Manually overridden from dashboard before it finished on its own");
         }
       }
     } catch { /* best-effort */ }
@@ -261,8 +268,14 @@ dashboard.get("/autoshift", async (c) => {
   const env = c.env as any;
   let cfg = { ...AUTOSHIFT_DEFAULT };
   try { const raw = await getState(env, "autoshift_cfg", ""); if (raw) cfg = { ...cfg, ...JSON.parse(raw) }; } catch {}
-  let state: any = { active: false, trigger_ts: null, until_ts: null, trigger_voltage: null };
-  try { const raw = await getState(env, "autoshift_state", ""); if (raw) state = { ...state, ...JSON.parse(raw) }; } catch {}
+  let state: any = { phase: "idle", trigger_ts: null, trigger_voltage: null, charge_start_ts: null, until_ts: null };
+  try {
+    const raw = await getState(env, "autoshift_state", "");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      state = parsed.phase ? { ...state, ...parsed } : { ...state, phase: parsed.active ? "charging" : "idle", trigger_voltage: parsed.trigger_voltage ?? null, until_ts: parsed.until_ts ?? null };
+    }
+  } catch {}
   return c.json({
     success: true,
     enabled: cfg.enabled,
@@ -270,7 +283,9 @@ dashboard.get("/autoshift", async (c) => {
     duration_min: cfg.duration_min,
     pv_stop_w: cfg.pv_stop_w,
     window: "18:00\u201306:00 (Pakistan time) \u2014 fixed, not adjustable here",
-    active: state.active,
+    phase: state.phase,
+    active: state.phase !== "idle",
+    charging: state.phase === "charging",
     trigger_voltage: state.trigger_voltage,
     until: state.until_ts ? new Date(state.until_ts * 1000).toISOString() : null,
   });
