@@ -113,53 +113,91 @@ export async function runSocTick(env: any) {
        pv_peak_w=MAX(daily_energy_log.pv_peak_w, excluded.pv_peak_w)`
   ).bind(today, r2(snap.wapda_today_kwh) ?? 0, r2(snap.energy_today) ?? 0, r2(realChargeKwh) ?? 0, r2(realDischargeKwh) ?? 0, Math.round(acc.pv_peak_w || 0)).run();
 
-  // --- auto-shift-to-WAPDA (voltage-triggered, fixed-duration) ---
+  // --- auto-shift-to-WAPDA (voltage-triggered; waits for REAL grid, every tick) ---
   let cfg = { ...AUTOSHIFT_DEFAULT };
   try { const raw = await getState(env, "autoshift_cfg", ""); if (raw) cfg = { ...cfg, ...JSON.parse(raw) }; } catch {}
-  let asState: any = { active: false, trigger_ts: null, until_ts: null, trigger_voltage: null };
-  try { const raw = await getState(env, "autoshift_state", ""); if (raw) asState = { ...asState, ...JSON.parse(raw) }; } catch {}
+  // phase: "idle" (not needed) -> "waiting_for_grid" (relay closed, WAPDA not
+  // yet confirmed present, rechecked every tick) -> "charging" (WAPDA
+  // confirmed, real duration countdown running) -> back to "idle" when done.
+  let asState: any = { phase: "idle", trigger_ts: null, trigger_voltage: null, charge_start_ts: null, until_ts: null };
+  try {
+    const raw = await getState(env, "autoshift_state", "");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      // migrate the old {active:boolean} shape from before this redesign
+      asState = parsed.phase ? { ...asState, ...parsed } : {
+        phase: parsed.active ? "charging" : "idle",
+        trigger_ts: parsed.trigger_ts ?? null, trigger_voltage: parsed.trigger_voltage ?? null,
+        charge_start_ts: parsed.trigger_ts ?? null, until_ts: parsed.until_ts ?? null,
+      };
+    }
+  } catch {}
 
   // Fixed nighttime trigger window: 18:00 (6 PM) through 05:59 (just before 6 AM), Pakistan local time.
   const localHour = new Date((snap.ts + 5 * 3600) * 1000).getUTCHours();
   const inNightWindow = localHour >= 18 || localHour < 6;
+  const pvNow = snap.solar_power ?? 0;
+  // "Grid confirmed" means the inverter itself reports real AC/power on the
+  // line — not just "the relay reports closed", which proves nothing if the
+  // grid line upstream has no power at all.
+  const gridConfirmed = (snap.grid_power ?? 0) > 20 || (snap.ac_voltage ?? 0) > 50;
+  const prevPhase = asState.phase;
 
   if (cfg.enabled && tuya) {
     const nowTs = snap.ts;
-    if (!asState.active) {
+
+    if (asState.phase === "idle") {
       if (inNightWindow && snap.v <= cfg.threshold_v && !tuya.relay_on) {
-        try {
-          await setTuyaRelay(env, true);
-          asState = { active: true, trigger_ts: nowTs, until_ts: nowTs + cfg.duration_min * 60, trigger_voltage: snap.v };
-          await logEvent(env, "autoshift", "Auto-shift: WAPDA turned ON",
-            `Battery at ${snap.v.toFixed(1)} V (\u2264 ${cfg.threshold_v} V threshold, ${localHour}:00 local) \u2014 will hold up to ${cfg.duration_min} min or until PV \u2265 ${cfg.pv_stop_w} W`);
-        } catch (e: any) { console.error("autoshift ON failed:", e?.message); }
+        asState = { phase: "waiting_for_grid", trigger_ts: nowTs, trigger_voltage: snap.v, charge_start_ts: null, until_ts: null };
+        try { await setTuyaRelay(env, true); } catch (e: any) { console.error("autoshift relay-on attempt failed:", e?.message); }
       }
-    } else {
-      // While holding, either of two things can end it early, before the fixed
-      // duration is up: PV recovering past the stop threshold, OR WAPDA itself
-      // genuinely coming back (confirmed via grid_power/ac_voltage from the
-      // inverter — not just "the relay reports closed", which tells you nothing
-      // if the grid line itself has no power). If NEITHER happens, the duration
-      // is the only fallback — and the battery keeps discharging the whole time,
-      // because closing a relay cannot create power that isn't there.
-      const pvNow = snap.solar_power ?? 0;
-      const gridConfirmed = (snap.grid_power ?? 0) > 20 || (snap.ac_voltage ?? 0) > 50;
-      if (pvNow >= cfg.pv_stop_w || gridConfirmed) {
-        try {
-          await setTuyaRelay(env, false);
-          const reason = gridConfirmed
-            ? `WAPDA power confirmed present (grid ${Math.round(snap.grid_power ?? 0)} W, ${Math.round(snap.ac_voltage ?? 0)} V) \u2014 ended early`
-            : `PV reached ${Math.round(pvNow)} W (\u2265 ${cfg.pv_stop_w} W stop threshold) \u2014 ended early`;
-          await logEvent(env, "autoshift", "Auto-shift: WAPDA turned OFF", reason);
-        } catch (e: any) { console.error("autoshift OFF (recovery) failed:", e?.message); }
-        asState = { active: false, trigger_ts: null, until_ts: null, trigger_voltage: null };
+    } else if (asState.phase === "waiting_for_grid") {
+      // Re-assert the relay closed every tick — cheap, and self-heals if an
+      // earlier command silently failed — and check every tick for REAL grid.
+      // The instant WAPDA is actually confirmed present, a full charge window
+      // starts from THIS moment, not from whenever the relay first closed.
+      try { await setTuyaRelay(env, true); } catch (e: any) { console.error("autoshift relay-on retry failed:", e?.message); }
+      if (gridConfirmed) {
+        asState = { ...asState, phase: "charging", charge_start_ts: nowTs, until_ts: nowTs + cfg.duration_min * 60 };
+      } else if (pvNow >= cfg.pv_stop_w) {
+        try { await setTuyaRelay(env, false); } catch (e: any) { console.error("autoshift cancel failed:", e?.message); }
+        asState = { phase: "idle", trigger_ts: null, trigger_voltage: null, charge_start_ts: null, until_ts: null };
+      }
+    } else if (asState.phase === "charging") {
+      if (pvNow >= cfg.pv_stop_w) {
+        try { await setTuyaRelay(env, false); } catch (e: any) { console.error("autoshift OFF (pv) failed:", e?.message); }
+        asState = { phase: "idle", trigger_ts: null, trigger_voltage: null, charge_start_ts: null, until_ts: null };
+      } else if (!gridConfirmed) {
+        // WAPDA dropped out again mid-hold (e.g. load-shedding resumed) — go
+        // back to watching every tick instead of abandoning the whole cycle;
+        // the relay stays closed so it's ready the instant grid returns.
+        asState = { ...asState, phase: "waiting_for_grid", until_ts: null };
       } else if (nowTs >= (asState.until_ts || 0)) {
-        try {
-          await setTuyaRelay(env, false);
-          await logEvent(env, "autoshift", "Auto-shift: WAPDA turned OFF",
-            `${cfg.duration_min} min elapsed with no PV or WAPDA recovery detected \u2014 battery kept discharging the whole hold; will retry if voltage is still low next tick`);
-        } catch (e: any) { console.error("autoshift OFF failed:", e?.message); }
-        asState = { active: false, trigger_ts: null, until_ts: null, trigger_voltage: null };
+        try { await setTuyaRelay(env, false); } catch (e: any) { console.error("autoshift OFF failed:", e?.message); }
+        asState = { phase: "idle", trigger_ts: null, trigger_voltage: null, charge_start_ts: null, until_ts: null };
+      }
+    }
+
+    // Log only on an actual phase TRANSITION, never every tick — a long wait
+    // for WAPDA can span hours and must not spam Recent Events.
+    if (asState.phase !== prevPhase) {
+      if (prevPhase === "idle" && asState.phase === "waiting_for_grid") {
+        await logEvent(env, "autoshift", "Auto-shift: watching for WAPDA",
+          `Battery at ${snap.v.toFixed(1)} V (\u2264 ${cfg.threshold_v} V, ${localHour}:00 local) \u2014 relay closed, rechecking every minute for real grid power before starting a ${cfg.duration_min}-min charge`);
+      } else if (prevPhase === "waiting_for_grid" && asState.phase === "charging") {
+        await logEvent(env, "autoshift", "Auto-shift: WAPDA confirmed \u2014 charging now",
+          `Grid power detected (${Math.round(snap.grid_power ?? 0)} W, ${Math.round(snap.ac_voltage ?? 0)} V) \u2014 charging for up to ${cfg.duration_min} min or until PV \u2265 ${cfg.pv_stop_w} W`);
+      } else if (prevPhase === "charging" && asState.phase === "waiting_for_grid") {
+        await logEvent(env, "autoshift", "Auto-shift: WAPDA lost again",
+          "Grid power dropped mid-charge \u2014 relay stays closed, watching every minute for it to return");
+      } else if (prevPhase === "charging" && asState.phase === "idle") {
+        const reason = pvNow >= cfg.pv_stop_w
+          ? `PV reached ${Math.round(pvNow)} W (\u2265 ${cfg.pv_stop_w} W) \u2014 ended early`
+          : `${cfg.duration_min} min of confirmed WAPDA charging finished`;
+        await logEvent(env, "autoshift", "Auto-shift: WAPDA turned OFF", reason);
+      } else if (prevPhase === "waiting_for_grid" && asState.phase === "idle") {
+        await logEvent(env, "autoshift", "Auto-shift: cancelled",
+          `PV reached ${Math.round(pvNow)} W before WAPDA ever returned \u2014 no longer needed, relay opened`);
       }
     }
     await setState(env, "autoshift_state", JSON.stringify(asState));
@@ -201,8 +239,11 @@ export async function runSocTick(env: any) {
     breaker_online: tuya ? tuya.online : null,
     breaker_energy_kwh: tuya ? tuya.energy_total_kwh : null,
     // autoshift status (for the settings card)
-    autoshift_active: asState.active,
+    autoshift_phase: asState.phase,
+    autoshift_active: asState.phase !== "idle",
+    autoshift_charging: asState.phase === "charging",
     autoshift_until: asState.until_ts ? new Date(asState.until_ts * 1000).toISOString() : null,
+    autoshift_trigger_voltage: asState.trigger_voltage ?? null,
     updated_at: new Date().toISOString(),
   };
   await setState(env, "live_status", JSON.stringify(status));

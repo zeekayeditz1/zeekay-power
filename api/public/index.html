@@ -411,7 +411,7 @@
     <div class="card">
       <div class="cd-head"><span class="cd-title">Auto-shift to WAPDA</span><span class="cd-sub">nighttime only (6 PM\u20136 AM) \u00b7 voltage-triggered</span></div>
       <div class="relay-row">
-        <div><div class="label">Enable auto-shift</div><div class="desc">Only arms between 6 PM and 6 AM. Closes the WAPDA relay once battery voltage drops to the trigger below, and holds it \u2014 but ends early the moment PV recovers past the stop threshold, even if the timer hasn't run out.</div></div>
+        <div><div class="label">Enable auto-shift</div><div class="desc">Only arms between 6 PM and 6 AM. Closes the WAPDA relay once battery voltage drops to the trigger below, then rechecks every minute for real grid power before starting the clock \u2014 a closed relay proves nothing if WAPDA itself is down. The charge ends early if PV recovers past the stop threshold, or if the duration runs out.</div></div>
         <div class="toggle" id="asToggle" role="switch" aria-checked="false" tabindex="0"><i></i></div>
       </div>
       <div class="settings-grid">
@@ -601,8 +601,9 @@
       if(document.activeElement!==$("asDuration")) $("asDuration").value = r.duration_min;
       if(document.activeElement!==$("asPvStop")) $("asPvStop").value = r.pv_stop_w;
       let msg;
-      if(r.active) msg = "Active now — WAPDA held ON until "+fmtTime(r.until)+" at the latest (triggered at "+fmt(r.trigger_voltage,1)+" V) — will end sooner if PV reaches "+fmt(r.pv_stop_w,0)+" W";
-      else if(r.enabled) msg = "Watching, 6 PM–6 AM only — turns WAPDA ON for up to "+r.duration_min+" min if battery drops to "+fmt(r.threshold_v,1)+" V, ends early once PV hits "+fmt(r.pv_stop_w,0)+" W";
+      if(r.charging) msg = "Charging now — WAPDA confirmed present, held until "+fmtTime(r.until)+" at the latest (triggered at "+fmt(r.trigger_voltage,1)+" V) — ends sooner if PV reaches "+fmt(r.pv_stop_w,0)+" W";
+      else if(r.active) msg = "Waiting for WAPDA — relay closed, battery at "+fmt(r.trigger_voltage,1)+" V, rechecking every minute for real grid power (a full "+r.duration_min+"-min charge starts the instant it's confirmed)";
+      else if(r.enabled) msg = "Watching, 6 PM–6 AM only — closes WAPDA relay if battery drops to "+fmt(r.threshold_v,1)+" V, waits for real grid before charging, ends early once PV hits "+fmt(r.pv_stop_w,0)+" W";
       else msg = "Disabled — battery voltage will not auto-switch WAPDA";
       $("asStatus").textContent = msg;
     }catch(e){ /* leave last known state on screen */ }
