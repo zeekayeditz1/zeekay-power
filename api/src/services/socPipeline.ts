@@ -53,7 +53,27 @@ export async function runSocTick(env: any) {
 
   // --- Tuya breaker (best-effort) ---
   let tuya: any = null;
-  try { if (tuyaConfigured(env)) { tuya = await fetchTuyaStatus(env); await setState(env, "tuya_status", JSON.stringify(tuya)); } } catch (e: any) { console.error("tuya read:", e?.message); }
+  let tuyaReadFailed = false;
+  try {
+    if (tuyaConfigured(env)) { tuya = await fetchTuyaStatus(env); await setState(env, "tuya_status", JSON.stringify(tuya)); }
+  } catch (e: any) { tuyaReadFailed = true; console.error("tuya read:", e?.message); }
+
+  // Log only on a REACHABILITY TRANSITION (not every tick) so a prolonged outage
+  // doesn't spam the events feed, but the moment it goes down or comes back is
+  // always visible on the dashboard — previously this was invisible anywhere.
+  if (tuyaConfigured(env)) {
+    let wasReachable = true;
+    try { wasReachable = (await getState(env, "tuya_reachable", "1")) !== "0"; } catch {}
+    const nowReachable = !tuyaReadFailed;
+    if (wasReachable && !nowReachable) {
+      await logEvent(env, "breaker", "WAPDA breaker unreachable",
+        "Tuya cloud API call failed \u2014 auto-shift automation is paused until it reconnects");
+    } else if (!wasReachable && nowReachable) {
+      await logEvent(env, "breaker", "WAPDA breaker reconnected",
+        "Tuya cloud API is responding again \u2014 auto-shift automation resumed");
+    }
+    try { await setState(env, "tuya_reachable", nowReachable ? "1" : "0"); } catch {}
+  }
 
   // --- daily accumulator: PV peak (not provided by SEMS) + solar/WAPDA charge SPLIT RATIO ---
   // (magnitudes for charge/discharge now come straight from the inverter's own
@@ -115,21 +135,29 @@ export async function runSocTick(env: any) {
         } catch (e: any) { console.error("autoshift ON failed:", e?.message); }
       }
     } else {
-      // While holding: PV recovering to the stop threshold ends the hold immediately,
-      // even if the fixed duration hasn't elapsed yet. Otherwise, the duration itself
-      // is the fallback cutoff (e.g. an overcast morning with little PV recovery).
+      // While holding, either of two things can end it early, before the fixed
+      // duration is up: PV recovering past the stop threshold, OR WAPDA itself
+      // genuinely coming back (confirmed via grid_power/ac_voltage from the
+      // inverter — not just "the relay reports closed", which tells you nothing
+      // if the grid line itself has no power). If NEITHER happens, the duration
+      // is the only fallback — and the battery keeps discharging the whole time,
+      // because closing a relay cannot create power that isn't there.
       const pvNow = snap.solar_power ?? 0;
-      if (pvNow >= cfg.pv_stop_w) {
+      const gridConfirmed = (snap.grid_power ?? 0) > 20 || (snap.ac_voltage ?? 0) > 50;
+      if (pvNow >= cfg.pv_stop_w || gridConfirmed) {
         try {
           await setTuyaRelay(env, false);
-          await logEvent(env, "autoshift", "Auto-shift: WAPDA turned OFF",
-            `PV reached ${Math.round(pvNow)} W (\u2265 ${cfg.pv_stop_w} W stop threshold) \u2014 ended early`);
-        } catch (e: any) { console.error("autoshift OFF (pv) failed:", e?.message); }
+          const reason = gridConfirmed
+            ? `WAPDA power confirmed present (grid ${Math.round(snap.grid_power ?? 0)} W, ${Math.round(snap.ac_voltage ?? 0)} V) \u2014 ended early`
+            : `PV reached ${Math.round(pvNow)} W (\u2265 ${cfg.pv_stop_w} W stop threshold) \u2014 ended early`;
+          await logEvent(env, "autoshift", "Auto-shift: WAPDA turned OFF", reason);
+        } catch (e: any) { console.error("autoshift OFF (recovery) failed:", e?.message); }
         asState = { active: false, trigger_ts: null, until_ts: null, trigger_voltage: null };
       } else if (nowTs >= (asState.until_ts || 0)) {
         try {
           await setTuyaRelay(env, false);
-          await logEvent(env, "autoshift", "Auto-shift: WAPDA turned OFF", `${cfg.duration_min} min window elapsed \u2014 reverted to auto`);
+          await logEvent(env, "autoshift", "Auto-shift: WAPDA turned OFF",
+            `${cfg.duration_min} min elapsed with no PV or WAPDA recovery detected \u2014 battery kept discharging the whole hold; will retry if voltage is still low next tick`);
         } catch (e: any) { console.error("autoshift OFF failed:", e?.message); }
         asState = { active: false, trigger_ts: null, until_ts: null, trigger_voltage: null };
       }
