@@ -56,38 +56,52 @@ async function snapshot(env: any) {
   const relay = parseInt(await getState(env, "relay_state", "1"), 10) === 1 ? 1 : 0;
   const mode = await getState(env, "mode", "auto");
 
-  // Prefer real live data written by the SOC pipeline cron. Fall back to demo.
   try {
     const raw = await getState(env, "live_status", "");
     if (raw) {
-      const live = JSON.parse(raw);
+      const s = JSON.parse(raw);
       let tuya: any = null;
       try { const traw = await getState(env, "tuya_status", ""); if (traw) tuya = JSON.parse(traw); } catch {}
-      const wapda = (live.grid_power ?? 0) > 5 || (live.ac_voltage ?? 0) > 50 || ((tuya?.grid_voltage ?? 0) > 50);
       const relayReal = tuya ? (tuya.relay_on ? 1 : 0) : relay;
+      const wapda = (s.grid_power ?? 0) > 5 || (s.ac_voltage ?? 0) > 50 || ((tuya?.grid_voltage ?? 0) > 50);
+      const soc = s.battery_soc ?? 0;
+      const socLabel = soc >= 70 ? "HIGH" : soc >= 35 ? "MEDIUM" : "LOW";
+      const charging = !!s.battery_charging;
+      const bstate = charging ? "charging" : (s.battery_power ?? 0) < -20 ? "discharging" : "idle";
       return {
-        battery_soc: live.battery_soc,
-        battery_voltage: live.battery_voltage,
-        soc_voltage: live.soc_voltage,
-        soc_coulomb: live.soc_coulomb,
-        bms_soc: live.bms_soc,
-        solar_power: Math.round(live.solar_power || 0),
-        load_power: Math.round(live.load_power || 0),
-        voltage: Math.round(live.ac_voltage || 0),
-        current: live.ac_voltage ? +(((live.load_power || 0) / live.ac_voltage).toFixed(1)) : 0,
-        power: Math.round(live.load_power || 0),
-        grid_power: Math.round(live.grid_power || 0),
-        energy_today: live.energy_today ?? null,
+        source: "live",
+        battery_soc: soc,
+        battery_soc_label: socLabel,
+        bms_soc: s.bms_soc,
+        battery_voltage: s.battery_voltage,
+        battery_current: s.battery_current,
+        battery_power: s.battery_power,
+        battery_charging: charging,
+        battery_state: bstate,
+        soc_voltage: s.soc_voltage,
+        soc_coulomb: s.soc_coulomb,
+        usable_capacity_ah: s.usable_capacity_ah,
+        solar_power: s.solar_power,
+        solar_peak_today: s.solar_peak_today,
+        pv_today_kwh: s.pv_today_kwh,
+        load_power: s.load_power,
+        voltage: s.load_voltage,
+        current: s.load_current,
+        power: s.load_power,
+        energy_today: s.pv_today_kwh,
+        grid_power: s.grid_power,
+        frequency: s.frequency,
+        meter_total_kwh: s.meter_total_kwh,
         wapda,
         relay_state: relayReal,
-        breaker_online: tuya ? tuya.online : null,
-        breaker_relay: tuya ? tuya.relay_status : null,
-        grid_voltage_breaker: tuya ? tuya.grid_voltage : null,
-        grid_frequency: tuya ? tuya.frequency_hz : null,
-        energy_total_kwh: tuya ? tuya.energy_total_kwh : null,
+        relay_closed: relayReal === 1,
         mode,
-        source: "live",
-        updated_at: live.updated_at,
+        charge_from_solar_kwh: s.charge_from_solar_kwh,
+        charge_from_wapda_kwh: s.charge_from_wapda_kwh,
+        total_charge_kwh: s.total_charge_kwh,
+        discharge_24h_kwh: s.discharge_24h_kwh,
+        breaker_online: s.breaker_online,
+        updated_at: s.updated_at,
       };
     }
   } catch {}
@@ -95,25 +109,33 @@ async function snapshot(env: any) {
   const soc = socAt(now);
   const solar = solarAt(now);
   const load = Math.round(620 + 380 * Math.abs(Math.sin(now.getTime() / 120000)));
-  const wapda = relay === 1; // mains transfer relay closed => grid available
-  const batteryVoltage = +(48 + ((soc - 45) / 45) * 6).toFixed(1); // 48–54 V pack
+  const wapda = relay === 1;
+  const batteryVoltage = +(48 + ((soc - 45) / 45) * 6).toFixed(1);
   const acVoltage = wapda ? +(228 + 4 * Math.sin(now.getTime() / 90000)).toFixed(1) : 0;
-  const power = load;
-  const current = acVoltage > 0 ? +(power / acVoltage).toFixed(1) : 0;
-  const energyToday = +(((now.getHours() * 60 + now.getMinutes()) / 1440) * 17.4).toFixed(2);
-
   return {
+    source: "demo",
     battery_soc: soc,
+    battery_soc_label: soc >= 70 ? "HIGH" : soc >= 35 ? "MEDIUM" : "LOW",
     battery_voltage: batteryVoltage,
-    solar_power: solar,          // TODO(sems): real PV power from GoodWe/SEMS
-    load_power: load,            // TODO(sems): real load power
-    voltage: acVoltage,          // TODO(sems)
-    current,                     // TODO(sems)
-    power,                       // TODO(sems)
-    energy_today: energyToday,   // TODO(sems): kWh generated today
-    wapda,                       // TODO(tuya): real mains-present sense
-    relay_state: relay,          // TODO(tuya): real relay state read-back
+    solar_power: solar,
+    solar_peak_today: solar,
+    pv_today_kwh: 0,
+    load_power: load,
+    voltage: acVoltage,
+    current: acVoltage > 0 ? +(load / acVoltage).toFixed(1) : 0,
+    power: load,
+    energy_today: 0,
+    grid_power: 0,
+    frequency: wapda ? 50 : 0,
+    meter_total_kwh: 0,
+    wapda,
+    relay_state: relay,
+    relay_closed: relay === 1,
     mode,
+    charge_from_solar_kwh: 0,
+    charge_from_wapda_kwh: 0,
+    total_charge_kwh: 0,
+    discharge_24h_kwh: 0,
     updated_at: now.toISOString(),
   };
 }
