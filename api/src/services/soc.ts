@@ -40,19 +40,27 @@ export function step(state: SocState, sample: Sample, cfg = DEFAULTS): SocState 
     s.ah_since_anchor = 0; s.soc_at_anchor = s.soc; s._prev = { v, i:i0 };
     return { ...s, soc_cc:s.soc, soc_v:s.soc, anchored:true, blended:s.soc };
   }
-  const dt_h = Math.max(0,(ts-(s.last_ts as number))/3600);
+  // Cap the raw elapsed time BEFORE it's used for energy integration or the
+  // resting-duration counter. Without this, a connectivity gap (worker
+  // downtime, a deploy, a SEMS outage) would let a single tick after the gap
+  // inject a huge coulomb-counting jump, or instantly satisfy the 30-minute
+  // "at rest" condition from one sample and force a false anchor.
+  const MAX_STEP_S = 600; // 10 minutes — matches the cap used elsewhere in the pipeline
+  const rawDt = ts - (s.last_ts as number);
+  const dtCapped = Math.max(0, Math.min(rawDt, MAX_STEP_S));
+  const dt_h = dtCapped / 3600;
   const i_signed = p_chg / v;
   let dAh = i_signed*dt_h; if (dAh>0) dAh *= (s.eta_charge as number);
-  const soc_cc = (s.soc as number) + (dAh/(s.c_usable_ah as number))*100;
+  const soc_cc = clamp((s.soc as number) + (dAh/(s.c_usable_ah as number))*100, 0, 100);
   s.ah_since_anchor = (s.ah_since_anchor||0) + dAh;
   const v_rest = v - i_signed*(s.ri_ohm as number);
   const soc_v = socFromRestingVoltage(v_rest);
   if (s._prev){ const dI=i_signed-s._prev.i, dV=v-s._prev.v;
-    if (Math.abs(dI)>3 && dt_h*3600<900){ const ri=-dV/dI; if (ri>0) s.ri_ohm=clamp(0.9*(s.ri_ohm as number)+0.1*ri,cfg.ri_bounds[0],cfg.ri_bounds[1]); } }
+    if (Math.abs(dI)>3 && dtCapped<900){ const ri=-dV/dI; if (ri>0) s.ri_ohm=clamp(0.9*(s.ri_ohm as number)+0.1*ri,cfg.ri_bounds[0],cfg.ri_bounds[1]); } }
   s._prev = { v, i:i_signed };
   const chargerHolding = i_signed>0.3 && v>50.4;
   const nearRest = Math.abs(i_signed)<cfg.rest_current_a && !chargerHolding;
-  s.rest_run_s = nearRest ? (s.rest_run_s||0)+(ts-(s.last_ts as number)) : 0;
+  s.rest_run_s = nearRest ? (s.rest_run_s||0)+dtCapped : 0;
   let anchored=false;
   if ((s.rest_run_s as number)>=cfg.rest_min_s && v_rest<=50.8 && v_rest>=42.0){
     const dSoc = soc_v-(s.soc_at_anchor ?? soc_v);
