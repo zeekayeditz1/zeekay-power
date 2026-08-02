@@ -6,6 +6,7 @@
 import { fetchSemsSnapshot } from "./sems";
 import { step, SocState } from "./soc";
 import { getState, setState, ensureTables } from "./dashboardStore";
+import { fetchTuyaStatus, tuyaConfigured } from "./tuya";
 
 const r2 = (x: number | null | undefined) => (x == null ? null : Math.round(x * 100) / 100);
 
@@ -46,6 +47,14 @@ export async function runSocTick(env: any) {
     )
     .bind(snap.ts, snap.v, snap.p_chg, r2(out.blended), r2(out.soc_v), r2(out.soc_cc), snap.bms_soc, out.anchored ? 1 : 0)
     .run();
+
+  // Best-effort Tuya read (never breaks the SOC pipeline)
+  try {
+    if (tuyaConfigured(env)) {
+      const tuya = await fetchTuyaStatus(env);
+      await setState(env, "tuya_status", JSON.stringify(tuya));
+    }
+  } catch (e: any) { console.error("tuya read:", e?.message); }
 
   return status;
 }

@@ -8,6 +8,7 @@ import {
   getEvents,
 } from "../services/dashboardStore";
 import { runSocTick } from "../services/socPipeline";
+import { setTuyaRelay, fetchTuyaStatus } from "../services/tuya";
 
 /*
 |--------------------------------------------------------------------------
@@ -60,7 +61,10 @@ async function snapshot(env: any) {
     const raw = await getState(env, "live_status", "");
     if (raw) {
       const live = JSON.parse(raw);
-      const wapda = (live.grid_power ?? 0) > 5 || (live.ac_voltage ?? 0) > 50;
+      let tuya: any = null;
+      try { const traw = await getState(env, "tuya_status", ""); if (traw) tuya = JSON.parse(traw); } catch {}
+      const wapda = (live.grid_power ?? 0) > 5 || (live.ac_voltage ?? 0) > 50 || ((tuya?.grid_voltage ?? 0) > 50);
+      const relayReal = tuya ? (tuya.relay_on ? 1 : 0) : relay;
       return {
         battery_soc: live.battery_soc,
         battery_voltage: live.battery_voltage,
@@ -75,7 +79,12 @@ async function snapshot(env: any) {
         grid_power: Math.round(live.grid_power || 0),
         energy_today: live.energy_today ?? null,
         wapda,
-        relay_state: relay,
+        relay_state: relayReal,
+        breaker_online: tuya ? tuya.online : null,
+        breaker_relay: tuya ? tuya.relay_status : null,
+        grid_voltage_breaker: tuya ? tuya.grid_voltage : null,
+        grid_frequency: tuya ? tuya.frequency_hz : null,
+        energy_total_kwh: tuya ? tuya.energy_total_kwh : null,
         mode,
         source: "live",
         updated_at: live.updated_at,
@@ -166,10 +175,16 @@ dashboard.post("/relay", async (c) => {
 
   const next = body && (body.state === 1 || body.state === true || body.state === "1") ? 1 : 0;
 
-  // TODO(tuya): call Tuya cloud API here to physically switch the relay.
-  //   await setTuyaRelay(c.env, next);
-
+  try {
+    await setTuyaRelay(c.env as any, next === 1);
+  } catch (e: any) {
+    return c.json({ success: false, error: "tuya command failed: " + (e?.message || e) }, 502);
+  }
   await setState(c.env as any, "relay_state", String(next));
+  try {
+    const ts = await fetchTuyaStatus(c.env as any);
+    await setState(c.env as any, "tuya_status", JSON.stringify(ts));
+  } catch { /* read-back best-effort */ }
   await logEvent(
     c.env as any,
     "relay",
