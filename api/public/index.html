@@ -229,6 +229,31 @@
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
   .skl{background:linear-gradient(90deg,rgba(255,255,255,.05),rgba(255,255,255,.11),rgba(255,255,255,.05));background-size:200% 100%;animation:shim 1.3s infinite;border-radius:6px;color:transparent!important}
   @keyframes shim{to{background-position:-200% 0}}
+
+  /* --- rich dashboard additions --- */
+  .stack{display:grid;gap:16px;max-width:600px;margin:0 auto;width:100%}
+  .big-card .bc-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px}
+  .big-card .bc-head h3{margin:0}
+  .big-card .bc-main{display:flex;align-items:baseline;gap:10px;margin:4px 0 10px}
+  .tiles{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+  .tile{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:14px;padding:12px 14px}
+  .tile .tk{font-size:11px;color:#8b95a7;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}
+  .tile .tv{font-size:20px;font-weight:700}
+  .tile .tv small{font-size:12px;color:#8b95a7;font-weight:500}
+  .cd-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+  .cd-title{font-size:15px;font-weight:700}
+  .cd-sub,.faint{font-size:11px;color:#8b95a7}
+  .cd-sec{margin-top:14px}
+  .cd-row{display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin-bottom:10px}
+  .cd-tiles{grid-template-columns:repeat(2,1fr)}
+  .cd-bar{display:flex;height:8px;border-radius:6px;overflow:hidden;background:rgba(255,255,255,.06);margin:12px 0 8px}
+  .cd-bar i{display:block;height:100%}
+  #cdBarSolar{background:#f6b73c}
+  #cdBarWapda{background:#8b7cf6}
+  .cd-legend{display:flex;gap:16px;font-size:12px;color:#8b95a7}
+  .cd-legend b{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:middle}
+  .dot-solar{background:#f6b73c}
+  .dot-wapda{background:#8b7cf6}
 </style>
 </head>
 <body>
@@ -268,98 +293,94 @@
     <button class="icon-btn" id="logoutBtn" title="Sign out">Sign out</button>
   </div>
 
-  <!-- KPIs -->
-  <div class="grid kpis">
-    <div class="card kpi">
-      <div class="icon i-batt">🔋</div>
-      <h3>Battery</h3>
-      <div><span class="big mono" id="kBatt">--</span><span class="unit">%</span></div>
+  <div class="stack">
+    <div class="card big-card">
+      <div class="bc-head"><h3>Battery</h3><div class="icon i-batt">🔋</div></div>
+      <div class="bc-main"><span class="big mono" id="kBatt">--</span><span class="unit">%</span><span class="chip" id="battLabel">—</span></div>
       <div class="bar"><i id="battBar" style="width:0%"></i></div>
-      <div class="sub" id="kBattSub">from pack voltage</div>
+      <div class="sub" id="kBattSub">inverter: — · — V</div>
     </div>
-    <div class="card kpi">
-      <div class="icon i-solar">☀️</div>
-      <h3>Solar</h3>
-      <div><span class="big mono" id="kSolar">--</span><span class="unit">W</span></div>
-      <div class="sub" id="kSolarSub">PV generation</div>
+
+    <div class="card big-card">
+      <div class="bc-head"><h3>Solar</h3><div class="icon i-solar">☀️</div></div>
+      <div class="bc-main"><span class="big mono" id="kSolar">--</span><span class="unit">W</span></div>
+      <div class="sub" id="kSolarSub">peak — W · today — kWh</div>
     </div>
-    <div class="card kpi">
-      <div class="icon i-load">🏠</div>
-      <h3>Load</h3>
-      <div><span class="big mono" id="kLoad">--</span><span class="unit">W</span></div>
-      <div class="sub" id="kLoadSub">house consumption</div>
+
+    <div class="card big-card">
+      <div class="bc-head"><h3>Load</h3><div class="icon i-load">🏠</div></div>
+      <div class="bc-main"><span class="big mono" id="kLoad">--</span><span class="unit">W</span></div>
+      <div class="sub" id="kLoadSub">—</div>
     </div>
-    <div class="card kpi">
-      <div class="icon i-grid">🔌</div>
-      <h3>WAPDA · Grid</h3>
-      <div><span class="big" id="kGrid">--</span></div>
+
+    <div class="card big-card">
+      <div class="bc-head"><h3>WAPDA · Grid</h3><div class="icon i-grid">🔌</div></div>
+      <div class="bc-main"><span class="big" id="kGrid">--</span></div>
       <div class="sub" id="kGridSub">mains status</div>
     </div>
-  </div>
 
-  <!-- MAIN COLS -->
-  <div class="grid cols">
-    <!-- left -->
-    <div class="grid" style="gap:16px">
-      <div class="card">
-        <div class="chart-head">
-          <div>
-            <h3 style="margin-bottom:6px">State of charge</h3>
-            <div class="now"><span class="mono" id="socNow">--</span><small>% now</small></div>
-          </div>
-          <div class="seg" id="rangeSeg">
-            <button data-h="6">6h</button>
-            <button data-h="12">12h</button>
-            <button data-h="24" class="active">24h</button>
-          </div>
-        </div>
-        <canvas id="socChart" height="220"></canvas>
+    <div class="card">
+      <div class="chart-head">
+        <div><h3 style="margin-bottom:6px">State of charge</h3><div class="now"><span class="mono" id="socNow">--</span><small>% now</small></div></div>
+        <div class="seg" id="rangeSeg"><button data-h="6">6h</button><button data-h="12">12h</button><button data-h="24" class="active">24h</button></div>
       </div>
+      <canvas id="socChart" height="220"></canvas>
+    </div>
 
-      <div class="card">
-        <h3>Measurements</h3>
-        <div class="meas">
-          <div class="m"><div class="k">Voltage</div><div class="v mono"><span id="mV">--</span> <small>V</small></div></div>
-          <div class="m"><div class="k">Current</div><div class="v mono"><span id="mI">--</span> <small>A</small></div></div>
-          <div class="m"><div class="k">Power</div><div class="v mono"><span id="mP">--</span> <small>W</small></div></div>
-          <div class="m"><div class="k">Energy today</div><div class="v mono"><span id="mE">--</span> <small>kWh</small></div></div>
-        </div>
+    <div class="tiles">
+      <div class="tile"><div class="tk">Grid power</div><div class="tv mono"><span id="tGrid">--</span> <small>W</small></div></div>
+      <div class="tile"><div class="tk">Frequency</div><div class="tv mono"><span id="tFreq">--</span> <small>Hz</small></div></div>
+      <div class="tile"><div class="tk">Meter total</div><div class="tv mono"><span id="tMeter">--</span> <small>kWh</small></div></div>
+      <div class="tile"><div class="tk">PV today</div><div class="tv mono"><span id="tPvToday">--</span> <small>kWh</small></div></div>
+      <div class="tile"><div class="tk">PV peak today</div><div class="tv mono"><span id="tPvPeak">--</span> <small>W</small></div></div>
+      <div class="tile"><div class="tk">Voltage · Current</div><div class="tv mono" id="tVI">-- / --</div></div>
+    </div>
+
+    <div class="card">
+      <h3>System status</h3>
+      <div class="status-grid">
+        <div class="sg"><div class="sgi i-grid">🔌</div><div><div class="sgk">WAPDA</div><div class="sgv" id="sgWapda">—</div></div></div>
+        <div class="sg"><div class="sgi i-batt">🔗</div><div><div class="sgk">Relay</div><div class="sgv" id="sgRelay">—</div></div></div>
+        <div class="sg"><div class="sgi i-solar">☀️</div><div><div class="sgk">Solar</div><div class="sgv" id="sgSolar">—</div></div></div>
+        <div class="sg"><div class="sgi i-load">🔋</div><div><div class="sgk">Battery</div><div class="sgv" id="sgBatt">—</div></div></div>
       </div>
     </div>
 
-    <!-- right -->
-    <div class="grid" style="gap:16px">
-      <div class="card">
-        <h3>WAPDA Control</h3>
-        <div class="relay-row">
-          <div>
-            <div class="label">Mains relay</div>
-            <div class="desc">Switching talks to Tuya directly. Automatic control keeps running in the cloud whether this page is open or not.</div>
-          </div>
-          <div class="toggle" id="relayToggle" role="switch" aria-checked="false" tabindex="0"><i></i></div>
+    <div class="card">
+      <div class="cd-head"><span class="cd-title">Charge &amp; Discharge</span><span class="cd-sub">today · cloud-metered from battery V×A</span></div>
+      <div class="cd-sec">
+        <div class="cd-row"><span>Charging</span><span class="faint">energy into the bank</span></div>
+        <div class="tiles cd-tiles">
+          <div class="tile"><div class="tk">☀ From solar</div><div class="tv mono"><span id="cSolar">--</span> <small>kWh</small></div></div>
+          <div class="tile"><div class="tk">🔌 From WAPDA</div><div class="tv mono"><span id="cWapda">--</span> <small>kWh</small></div></div>
+          <div class="tile"><div class="tk">Σ Total charge</div><div class="tv mono"><span id="cTotal">--</span> <small>kWh</small></div></div>
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
-          <span class="chip">Relay <b id="relayState">—</b></span>
-          <span class="chip">Mode <b id="relayMode">auto</b></span>
-          <span class="chip">Updated <b id="relayUpd">—</b></span>
-        </div>
-        <button class="ghost-btn" id="pollBtn">⟳ Force poll now</button>
+        <div class="cd-bar"><i id="cdBarSolar" style="width:100%"></i><i id="cdBarWapda" style="width:0%"></i></div>
+        <div class="cd-legend"><span><b class="dot-solar"></b>Solar</span><span><b class="dot-wapda"></b>WAPDA</span></div>
       </div>
+      <div class="cd-sec">
+        <div class="cd-row"><span>Discharging</span><span class="faint">energy drawn from the bank</span></div>
+        <div class="tile"><div class="tk">Total discharge (24h)</div><div class="tv mono"><span id="dTotal">--</span> <small>kWh</small></div></div>
+      </div>
+    </div>
 
-      <div class="card">
-        <h3>System status</h3>
-        <div class="status-grid">
-          <div class="sg"><div class="sgi i-grid">🔌</div><div><div class="sgk">WAPDA</div><div class="sgv" id="sgWapda">—</div></div></div>
-          <div class="sg"><div class="sgi i-batt">🔗</div><div><div class="sgk">Relay</div><div class="sgv" id="sgRelay">—</div></div></div>
-          <div class="sg"><div class="sgi i-solar">☀️</div><div><div class="sgk">Solar</div><div class="sgv" id="sgSolar">—</div></div></div>
-          <div class="sg"><div class="sgi i-load">🏠</div><div><div class="sgk">Load</div><div class="sgv" id="sgLoad">—</div></div></div>
-        </div>
+    <div class="card">
+      <h3>WAPDA Control</h3>
+      <div class="relay-row">
+        <div><div class="label">Mains relay</div><div class="desc">Switching talks to Tuya directly. Automatic control keeps running in the cloud whether this page is open or not.</div></div>
+        <div class="toggle" id="relayToggle" role="switch" aria-checked="false" tabindex="0"><i></i></div>
       </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+        <span class="chip">Relay <b id="relayState">—</b></span>
+        <span class="chip">Mode <b id="relayMode">auto</b></span>
+        <span class="chip">Updated <b id="relayUpd">—</b></span>
+      </div>
+      <button class="ghost-btn" id="pollBtn">⟳ Force poll now</button>
+    </div>
 
-      <div class="card">
-        <h3>Recent events</h3>
-        <div class="events" id="events"></div>
-      </div>
+    <div class="card">
+      <h3>Recent events</h3>
+      <div class="events" id="events"></div>
     </div>
   </div>
 </main>
@@ -463,39 +484,45 @@
   }
   function render(s){
     lastStatus = s;
-    // KPIs
-    $("kBatt").textContent = fmt(s.battery_soc,0);
-    $("battBar").style.width = Math.max(0,Math.min(100,s.battery_soc||0))+"%";
-    $("kBattSub").textContent = s.battery_voltage!=null?("pack "+fmt(s.battery_voltage,1)+" V"):"from pack voltage";
+    const soc = s.battery_soc||0;
+    $("kBatt").textContent = fmt(soc,0);
+    $("battBar").style.width = Math.max(0,Math.min(100,soc))+"%";
+    if($("battLabel")) $("battLabel").textContent = s.battery_soc_label||"—";
+    $("kBattSub").textContent = "inverter: "+(s.bms_soc!=null?fmt(s.bms_soc,0)+"%":"—")+" · "+(s.battery_voltage!=null?fmt(s.battery_voltage,1)+" V":"— V");
     $("kSolar").textContent = fmt(s.solar_power,0);
+    $("kSolarSub").textContent = "peak "+fmt(s.solar_peak_today,0)+" W · today "+fmt(s.pv_today_kwh,2)+" kWh";
     $("kLoad").textContent = fmt(s.load_power,0);
+    const bp = s.battery_power||0;
+    $("kLoadSub").textContent = bp>20?("battery charging "+fmt(bp,0)+" W"):bp<-20?("battery discharging "+fmt(-bp,0)+" W"):"battery idle";
     $("kGrid").textContent = s.wapda?"ON":"OFF";
     $("kGrid").className = "big "+(s.wapda?"ok":"bad");
-    $("kGridSub").textContent = s.wapda?"mains available":"running on battery";
-    $("socNow").textContent = fmt(s.battery_soc,0);
-
-    // measurements
-    $("mV").textContent = fmt(s.voltage,1);
-    $("mI").textContent = fmt(s.current,1);
-    $("mP").textContent = fmt(s.power,0);
-    $("mE").textContent = fmt(s.energy_today,2);
-
-    // relay
+    $("kGridSub").textContent = (s.wapda?"mains available":"running on battery")+" · relay "+(s.relay_closed?"closed":"open");
+    $("socNow").textContent = fmt(soc,0);
+    if($("tGrid")) $("tGrid").textContent = fmt(s.grid_power,0);
+    if($("tFreq")) $("tFreq").textContent = fmt(s.frequency,1);
+    if($("tMeter")) $("tMeter").textContent = fmt(s.meter_total_kwh,1);
+    if($("tPvToday")) $("tPvToday").textContent = fmt(s.pv_today_kwh,2);
+    if($("tPvPeak")) $("tPvPeak").textContent = fmt(s.solar_peak_today,0);
+    if($("tVI")) $("tVI").textContent = fmt(s.voltage,1)+" V / "+fmt(s.current,1)+" A";
     const on = !!s.relay_state;
     const tg = $("relayToggle");
-    tg.classList.toggle("on", on);
-    tg.classList.remove("busy");
+    tg.classList.toggle("on", on); tg.classList.remove("busy");
     tg.setAttribute("aria-checked", on?"true":"false");
     $("relayState").textContent = on?"ON":"OFF";
     $("relayMode").textContent = s.mode||"auto";
     $("relayUpd").textContent = ago(s.updated_at);
-
-    // status grid
     statusWord($("sgWapda"), s.wapda, ["Available","Down"]);
     statusWord($("sgRelay"), on, ["Closed","Open"]);
     statusWord($("sgSolar"), (s.solar_power||0)>5, ["Generating","Idle"]);
-    statusWord($("sgLoad"), (s.load_power||0)>5, ["Active","Idle"]);
-
+    const bel=$("sgBatt");
+    if(bel){ const st=s.battery_state||"idle"; bel.textContent=st.charAt(0).toUpperCase()+st.slice(1); bel.className="sgv "+(st==="charging"?"ok":st==="discharging"?"warn":"off"); }
+    if($("cSolar")) $("cSolar").textContent = fmt(s.charge_from_solar_kwh,2);
+    if($("cWapda")) $("cWapda").textContent = fmt(s.charge_from_wapda_kwh,2);
+    if($("cTotal")) $("cTotal").textContent = fmt(s.total_charge_kwh,2);
+    if($("dTotal")) $("dTotal").textContent = fmt(s.discharge_24h_kwh,2);
+    const cs=s.charge_from_solar_kwh||0, cw=s.charge_from_wapda_kwh||0, ct=cs+cw;
+    if($("cdBarSolar")) $("cdBarSolar").style.width = (ct>0?(cs/ct*100):100)+"%";
+    if($("cdBarWapda")) $("cdBarWapda").style.width = (ct>0?(cw/ct*100):0)+"%";
     setConn("live");
   }
 
@@ -584,8 +611,8 @@
   }
 
   function skeleton(){
-    ["kBatt","kSolar","kLoad","socNow","mV","mI","mP","mE"].forEach(id=>{ $(id).classList.add("skl"); $(id).textContent="0000"; });
-    setTimeout(()=>["kBatt","kSolar","kLoad","socNow","mV","mI","mP","mE"].forEach(id=>$(id).classList.remove("skl")),1200);
+    ["kBatt","kSolar","kLoad","socNow"].forEach(id=>{ $(id).classList.add("skl"); $(id).textContent="0000"; });
+    setTimeout(()=>["kBatt","kSolar","kLoad","socNow"].forEach(id=>$(id).classList.remove("skl")),1200);
   }
 
   async function boot(){

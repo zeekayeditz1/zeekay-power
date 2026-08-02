@@ -50,6 +50,12 @@ export interface SemsSnapshot {
   solar_power: number | null; load_power: number | null; grid_power: number | null;
   ac_voltage: number | null;
   energy_today: number | null;
+  load_voltage: number | null;
+  load_current: number | null;
+  battery_current: number | null;
+  frequency: number | null;
+  meter_total_kwh: number | null;
+  pv_power: number | null;
 }
 
 /** Pull one live reading. p_chg: POSITIVE = charging (SEMS reports negative for charge). */
@@ -72,8 +78,14 @@ export async function fetchSemsSnapshot(env: Env): Promise<SemsSnapshot> {
     solar_power: numOf(pf.pv),
     load_power: numOf(pf.load),
     grid_power: numOf(pf.grid),
-    ac_voltage: numOf(full.output_voltage ?? inv.output_voltage),
-    energy_today: numOf(inv.eday),
+    ac_voltage: numOf(full.vload ?? full.output_voltage ?? inv.output_voltage),
+    energy_today: numOf(full.eday ?? inv.eday),
+    load_voltage: numOf(full.vload),
+    load_current: numOf(full.iload),
+    battery_current: numOf(full.ibattery1),
+    frequency: numOf(full.fac1),
+    meter_total_kwh: numOf(full.eday_buy ?? full.etotal_buy),
+    pv_power: numOf(pf.pv ?? full.pv_power),
   };
 }
 
