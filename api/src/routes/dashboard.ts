@@ -213,6 +213,23 @@ dashboard.post("/relay", async (c) => {
     const ts = await fetchTuyaStatus(c.env as any);
     await setState(c.env as any, "tuya_status", JSON.stringify(ts));
   } catch { /* read-back best-effort */ }
+
+  // If auto-shift was mid-hold and the user just manually turned WAPDA off,
+  // clear the hold state so /api/status stops reporting a stale "active until"
+  // — the manual override takes precedence over the automation's own timer.
+  if (next === 0) {
+    try {
+      const raw = await getState(c.env as any, "autoshift_state", "");
+      if (raw) {
+        const as = JSON.parse(raw);
+        if (as && as.active) {
+          await setState(c.env as any, "autoshift_state", JSON.stringify({ active: false, trigger_ts: null, until_ts: null, trigger_voltage: null }));
+          await logEvent(c.env as any, "autoshift", "Auto-shift hold ended", "Manually overridden from dashboard before its timer/PV condition finished");
+        }
+      }
+    } catch { /* best-effort */ }
+  }
+
   await logEvent(
     c.env as any,
     "relay",

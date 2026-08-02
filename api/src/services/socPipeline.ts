@@ -18,6 +18,23 @@ const AUTOSHIFT_DEFAULT = { enabled: false, threshold_v: 45.8, duration_min: 60,
 
 export async function runSocTick(env: any) {
   await ensureTables(env);
+
+  // Guard against overlapping runs — the 1-minute cron and a manual "Force poll"
+  // click can land close together, and without this two concurrent ticks could
+  // both decide independently to fire a Tuya relay command or race on writing
+  // autoshift_state. 50s TTL is comfortably under the 60s cron interval, so it
+  // never blocks normal sequential ticks, only true overlaps.
+  const nowEpoch = Math.floor(Date.now() / 1000);
+  let lockRaw = "";
+  try { lockRaw = await getState(env, "tick_lock", ""); } catch {}
+  if (lockRaw) {
+    const lockTs = parseInt(lockRaw, 10);
+    if (Number.isFinite(lockTs) && nowEpoch - lockTs < 50) {
+      throw new Error("SOC tick already running \u2014 skipped an overlapping call");
+    }
+  }
+  await setState(env, "tick_lock", String(nowEpoch));
+
   const snap = await fetchSemsSnapshot(env);
   if (snap.v == null || snap.p_chg == null) throw new Error("bad SEMS sample");
 

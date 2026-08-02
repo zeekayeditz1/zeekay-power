@@ -50,6 +50,19 @@ async function getToken(env: TuyaEnv): Promise<string> {
   await setState(env as any, "tuya_token", JSON.stringify({ token: d.result.access_token, exp: Date.now() + (d.result.expire_time - 120) * 1000 }));
   return d.result.access_token;
 }
+/** Signed call that transparently refreshes an expired/invalid token and retries once.
+ *  Used for BOTH reads and the relay command — previously only the read path had this,
+ *  meaning a stale cached token could make a relay switch silently fail with no retry. */
+async function callWithTokenRetry(env: TuyaEnv, method: string, path: string, body = ""): Promise<any> {
+  let token = await getToken(env);
+  let d = await signedFetch(env, token, method, path, body);
+  if (String(d.code) === "1010" || String(d.code) === "1011") {
+    await setState(env as any, "tuya_token", "");
+    token = await getToken(env);
+    d = await signedFetch(env, token, method, path, body);
+  }
+  return d;
+}
 // Tuya phase_a raw: [V:2B @0.1V][I:3B @0.001A][P:3B @1W]
 function decodePhase(b64?: string) {
   if (!b64) return null;
@@ -67,9 +80,7 @@ export interface TuyaStatus {
   frequency_hz: number | null; energy_total_kwh: number | null; fault: number | null; updated_at: string;
 }
 export async function fetchTuyaStatus(env: TuyaEnv): Promise<TuyaStatus> {
-  let token = await getToken(env);
-  let d = await signedFetch(env, token, "GET", `/v1.0/devices/${env.TUYA_DEVICE_ID}/status`);
-  if (String(d.code) === "1010" || String(d.code) === "1011") { await setState(env as any, "tuya_token", ""); token = await getToken(env); d = await signedFetch(env, token, "GET", `/v1.0/devices/${env.TUYA_DEVICE_ID}/status`); }
+  const d = await callWithTokenRetry(env, "GET", `/v1.0/devices/${env.TUYA_DEVICE_ID}/status`);
   if (!d.success) throw new Error(`tuya status: code=${d.code} ${d.msg}`);
   const m: Record<string, any> = {}; for (const x of d.result) m[x.code] = x.value;
   const ph = decodePhase(m.phase_a);
@@ -86,9 +97,8 @@ export async function fetchTuyaStatus(env: TuyaEnv): Promise<TuyaStatus> {
 }
 /** Switch the WAPDA breaker on/off (control DP is `switch`). */
 export async function setTuyaRelay(env: TuyaEnv, on: boolean): Promise<boolean> {
-  const token = await getToken(env);
   const body = JSON.stringify({ commands: [{ code: "switch", value: !!on }] });
-  const d = await signedFetch(env, token, "POST", `/v1.0/devices/${env.TUYA_DEVICE_ID}/commands`, body);
+  const d = await callWithTokenRetry(env, "POST", `/v1.0/devices/${env.TUYA_DEVICE_ID}/commands`, body);
   if (!d.success) throw new Error(`tuya command: code=${d.code} ${d.msg}`);
   return d.result === true || d.success === true;
 }
