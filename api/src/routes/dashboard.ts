@@ -8,6 +8,7 @@ import {
   getEvents,
 } from "../services/dashboardStore";
 import { runSocTick } from "../services/socPipeline";
+import { requireFullAccess } from "../middleware/auth";
 import { setTuyaRelay, fetchTuyaStatus } from "../services/tuya";
 
 /*
@@ -199,7 +200,7 @@ dashboard.get("/events", async (c) => {
 });
 
 /* ---------- POST /api/relay { state: 0|1 } ---------- */
-dashboard.post("/relay", async (c) => {
+dashboard.post("/relay", requireFullAccess, async (c) => {
   let body: any = {};
   try {
     body = await c.req.json();
@@ -248,7 +249,7 @@ dashboard.post("/relay", async (c) => {
 });
 
 /* ---------- POST /api/poll ---------- */
-dashboard.post("/poll", async (c) => {
+dashboard.post("/poll", requireFullAccess, async (c) => {
   try { await runSocTick(c.env as any); } catch (e: any) { console.error("poll tick:", e?.message); }
   await logEvent(
     c.env as any,
@@ -291,7 +292,7 @@ dashboard.get("/autoshift", async (c) => {
   });
 });
 
-dashboard.post("/autoshift", async (c) => {
+dashboard.post("/autoshift", requireFullAccess, async (c) => {
   const env = c.env as any;
   let body: any = {};
   try { body = await c.req.json(); } catch { /* ignore */ }

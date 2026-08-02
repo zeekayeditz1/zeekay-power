@@ -4,6 +4,7 @@ import { cors } from "hono/cors";
 import authRoutes from "./routes/auth";
 import userRoutes from "./routes/user";
 import dashboardRoutes from "./routes/dashboard";
+import apiKeyRoutes from "./routes/apiKeys";
 import { runSocTick } from "./services/socPipeline";
 
 export interface Env {
@@ -108,6 +109,7 @@ app.get("/api/db-test", async (c) => {
 app.route("/api/auth", authRoutes);
 app.route("/api/user", userRoutes);
 app.route("/api", dashboardRoutes);
+app.route("/api/keys", apiKeyRoutes);
 
 /*
 |--------------------------------------------------------------------------

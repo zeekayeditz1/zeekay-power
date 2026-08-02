@@ -90,3 +90,25 @@ CREATE TABLE IF NOT EXISTS battery_history (
     soc_blended REAL, soc_v REAL, soc_cc REAL,
     bms_soc REAL, anchored INTEGER
 );
+
+-- ==========================
+-- DAILY ENERGY LOG (billing-cycle history, resets on the 22nd)
+-- ==========================
+CREATE TABLE IF NOT EXISTS daily_energy_log (
+    date TEXT PRIMARY KEY,           -- YYYY-MM-DD, Pakistan local day
+    wapda_import_kwh REAL, solar_kwh REAL,
+    charge_kwh REAL, discharge_kwh REAL, pv_peak_w REAL
+);
+
+-- ==========================
+-- API KEYS (programmatic access, separate from the browser JWT login)
+-- ==========================
+CREATE TABLE IF NOT EXISTS api_keys (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    key_hash TEXT NOT NULL UNIQUE,   -- SHA-256 of the key; plaintext is never stored
+    scope TEXT NOT NULL DEFAULT 'full',  -- 'full' | 'read_only'
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_used_at TEXT,
+    revoked INTEGER NOT NULL DEFAULT 0
+);

@@ -49,6 +49,17 @@ export async function ensureTables(env: StoreEnv): Promise<void> {
         charge_kwh REAL, discharge_kwh REAL, pv_peak_w REAL
       )`
     ),
+    env.zeekay_power_db.prepare(
+      `CREATE TABLE IF NOT EXISTS api_keys (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        key_hash TEXT NOT NULL UNIQUE,
+        scope TEXT NOT NULL DEFAULT 'full',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        last_used_at TEXT,
+        revoked INTEGER NOT NULL DEFAULT 0
+      )`
+    ),
   ]);
 
   // Seed a couple of events the first time so the panel isn't empty.

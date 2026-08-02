@@ -258,6 +258,22 @@
   .cycle-row .cr-vals{display:flex;gap:14px;font-size:13px}
   .cycle-row .cr-vals b{color:var(--accent)}
   .cycles-note{font-size:11.5px;color:var(--faint);margin-top:10px}
+  /* API keys */
+  .settings-grid select{width:100%;background:rgba(255,255,255,.04);border:1px solid var(--stroke);border-radius:10px;padding:10px 12px;color:var(--txt);font-family:var(--font);font-size:15px;box-sizing:border-box}
+  .settings-grid select:focus{outline:none;border-color:var(--accent)}
+  .ak-newkey{margin-top:14px;padding:14px;border-radius:12px;background:rgba(55,245,181,.08);border:1px solid rgba(55,245,181,.35)}
+  .ak-newkey-label{font-size:12px;color:var(--accent);font-weight:700;margin-bottom:8px}
+  .ak-newkey-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .ak-newkey-row code{flex:1;min-width:200px;background:rgba(0,0,0,.35);padding:10px 12px;border-radius:8px;font-family:monospace;font-size:13px;word-break:break-all;color:var(--txt)}
+  .ak-list{display:grid;gap:10px;margin-top:16px}
+  .ak-row{display:flex;justify-content:space-between;align-items:center;gap:10px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:12px;padding:11px 14px;flex-wrap:wrap}
+  .ak-row.revoked{opacity:.5}
+  .ak-row .ak-name{font-weight:700}
+  .ak-row .ak-meta{font-size:12px;color:var(--muted)}
+  .ak-row .ak-scope{font-size:11px;padding:3px 8px;border-radius:999px;background:rgba(255,255,255,.08);color:var(--muted);margin-left:8px}
+  .ak-row .ak-scope.full{background:rgba(55,245,181,.15);color:var(--accent)}
+  .ak-revoke-btn{background:transparent;border:1px solid rgba(255,90,90,.4);color:#ff6b6b;border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer}
+  .ak-revoke-btn:hover{background:rgba(255,90,90,.1)}
   .big-card .bc-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px}
   .big-card .bc-head h3{margin:0}
   .big-card .bc-main{display:flex;align-items:baseline;gap:10px;margin:4px 0 10px}
@@ -437,6 +453,37 @@
       <div class="cycles-list" id="cyclesList"><div class="cycles-note">Loading…</div></div>
       <div class="cycles-note">History builds forward from the day this dashboard went live — earlier months have no data to show yet.</div>
     </div>
+    </div>
+
+    <div class="card span-full">
+      <div class="cd-head"><span class="cd-title">API keys</span><span class="cd-sub">programmatic access to this dashboard's API \u2014 for scripts, the WapdaWatch app, or your own tools</span></div>
+
+      <div class="settings-grid" style="align-items:end">
+        <div>
+          <label>Key name</label>
+          <input type="text" id="akName" placeholder="e.g. WapdaWatch app" maxlength="64">
+        </div>
+        <div>
+          <label>Access</label>
+          <select id="akScope">
+            <option value="full">Full (read + control relay/settings)</option>
+            <option value="read_only">Read-only (status/history/events only)</option>
+          </select>
+        </div>
+        <div>
+          <button class="ghost-btn" id="akCreateBtn" style="width:100%">+ Create key</button>
+        </div>
+      </div>
+
+      <div id="akNewKeyBox" class="ak-newkey" style="display:none">
+        <div class="ak-newkey-label">Copy this now \u2014 it will never be shown again</div>
+        <div class="ak-newkey-row">
+          <code id="akNewKeyValue"></code>
+          <button class="ghost-btn" id="akCopyBtn">Copy</button>
+        </div>
+      </div>
+
+      <div class="ak-list" id="akList"><div class="cycles-note">Loading\u2026</div></div>
     </div>
 
     <div class="card span-full">
@@ -645,6 +692,55 @@
     catch(e){ /* keep whatever was last shown */ }
   }
 
+  /* ---------------- API keys ---------------- */
+  function renderApiKeys(keys){
+    const el = $("akList");
+    if(!keys || !keys.length){ el.innerHTML = '<div class="cycles-note">No API keys yet.</div>'; return; }
+    el.innerHTML = keys.map(k=>{
+      const meta = "Created "+fmtDate((k.created_at||"").slice(0,10))+(k.last_used_at?(" · last used "+fmtDate(k.last_used_at.slice(0,10))):" · never used");
+      return `<div class="ak-row${k.revoked?' revoked':''}">
+        <div>
+          <span class="ak-name">${escapeHtml(k.name)}</span>
+          <span class="ak-scope${k.scope==='full'?' full':''}">${k.scope==='full'?'full access':'read-only'}</span>
+          <div class="ak-meta">${meta}${k.revoked?' · revoked':''}</div>
+        </div>
+        ${k.revoked?'':`<button class="ak-revoke-btn" data-id="${k.id}">Revoke</button>`}
+      </div>`;
+    }).join("");
+    el.querySelectorAll(".ak-revoke-btn").forEach(btn=>{
+      btn.addEventListener("click", ()=>revokeApiKeyUI(btn.getAttribute("data-id")));
+    });
+  }
+  async function loadApiKeys(){
+    try{ const r = await api("/api/keys"); renderApiKeys((r&&r.keys)||[]); }
+    catch(e){ /* keep whatever was last shown */ }
+  }
+  async function createApiKeyUI(){
+    const btn = $("akCreateBtn"); const orig = btn.textContent;
+    const name = $("akName").value.trim() || "Unnamed key";
+    const scope = $("akScope").value;
+    btn.disabled = true; btn.textContent = "Creating…";
+    try{
+      const r = await api("/api/keys", { method:"POST", body: JSON.stringify({ name, scope }) });
+      if(r && r.success===false) throw new Error(r.error||"could not create key");
+      $("akNewKeyValue").textContent = r.key;
+      $("akNewKeyBox").style.display = "block";
+      $("akName").value = "";
+      toast("API key created — copy it now","ok");
+      await loadApiKeys(); loadEvents();
+    }catch(e){ toast(e.message||"Could not create key","err"); }
+    finally{ btn.disabled=false; btn.textContent=orig; }
+  }
+  async function revokeApiKeyUI(id){
+    if(!id) return;
+    try{
+      const r = await api("/api/keys/"+id, { method:"DELETE" });
+      if(r && r.success===false) throw new Error(r.error||"could not revoke key");
+      toast("API key revoked","ok");
+      await loadApiKeys(); loadEvents();
+    }catch(e){ toast(e.message||"Could not revoke key","err"); }
+  }
+
 
   /* ---------------- SOC chart (vanilla canvas) ---------------- */
   function drawChart(points){
@@ -738,7 +834,7 @@
   async function boot(){
     setConn("connecting");
     skeleton();
-    await Promise.all([loadStatus(), loadHistory(), loadEvents(), loadAutoshift(), loadCycles()]);
+    await Promise.all([loadStatus(), loadHistory(), loadEvents(), loadAutoshift(), loadCycles(), loadApiKeys()]);
     if(pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(()=>{ loadStatus(); loadEvents(); loadAutoshift(); }, 15000);
     setInterval(()=>{ if(document.getElementById("app").style.display!=="none") { loadHistory(); loadCycles(); } }, 60000);
@@ -770,10 +866,16 @@
     finally{ b.disabled=false; b.textContent=o; }
   });
 
-  $("refreshBtn").addEventListener("click", ()=>{ loadStatus(); loadHistory(); loadEvents(); loadAutoshift(); loadCycles(); });
+  $("refreshBtn").addEventListener("click", ()=>{ loadStatus(); loadHistory(); loadEvents(); loadAutoshift(); loadCycles(); loadApiKeys(); });
   $("asToggle").addEventListener("click", ()=>{ $("asToggle").classList.toggle("on"); });
   $("asToggle").addEventListener("keydown",(e)=>{ if(e.key===" "||e.key==="Enter"){ e.preventDefault(); $("asToggle").classList.toggle("on"); } });
   $("asSaveBtn").addEventListener("click", saveAutoshift);
+  $("akCreateBtn").addEventListener("click", createApiKeyUI);
+  $("akCopyBtn").addEventListener("click", async ()=>{
+    const v = $("akNewKeyValue").textContent;
+    try{ await navigator.clipboard.writeText(v); toast("Copied","ok"); }
+    catch(e){ toast("Copy failed — select and copy manually","err"); }
+  });
 
   $("rangeSeg").addEventListener("click",(e)=>{
     const btn=e.target.closest("button"); if(!btn) return;
