@@ -1,16 +1,20 @@
 /*
-| SOC + energy pipeline: pull SEMS, run estimator, read Tuya breaker, accumulate
-| daily energy (charge split by source, PV peak) and 24h discharge, then persist
-| a rich live_status for /api/status. Runs every minute (cron) and on /api/poll.
+| SOC + energy pipeline: pull SEMS, run estimator, read Tuya breaker, persist a
+| rich live_status for /api/status, log a daily energy row (real inverter
+| counters — grid import, charge, discharge) for billing-cycle history, and
+| run the voltage-triggered auto-shift-to-WAPDA automation.
+| Runs every minute (cron) and on-demand via /api/poll.
 */
 import { fetchSemsSnapshot } from "./sems";
 import { step, SocState } from "./soc";
-import { fetchTuyaStatus, tuyaConfigured } from "./tuya";
-import { getState, setState, ensureTables } from "./dashboardStore";
+import { fetchTuyaStatus, setTuyaRelay, tuyaConfigured } from "./tuya";
+import { getState, setState, ensureTables, logEvent } from "./dashboardStore";
 
 const r2 = (x: number | null | undefined) => (x == null ? null : Math.round(x * 100) / 100);
-// Pakistan is UTC+5 (no DST) — local calendar day for "today" counters.
+// Pakistan is UTC+5 (no DST) — local calendar day for "today" counters & the billing-cycle grouping.
 function localDay(ts_s: number) { return new Date((ts_s + 5 * 3600) * 1000).toISOString().slice(0, 10); }
+
+const AUTOSHIFT_DEFAULT = { enabled: false, threshold_v: 45.8, duration_min: 60 };
 
 export async function runSocTick(env: any) {
   await ensureTables(env);
@@ -34,7 +38,10 @@ export async function runSocTick(env: any) {
   let tuya: any = null;
   try { if (tuyaConfigured(env)) { tuya = await fetchTuyaStatus(env); await setState(env, "tuya_status", JSON.stringify(tuya)); } } catch (e: any) { console.error("tuya read:", e?.message); }
 
-  // --- daily energy accumulators (charge split by source + PV peak) ---
+  // --- daily accumulator: PV peak (not provided by SEMS) + solar/WAPDA charge SPLIT RATIO ---
+  // (magnitudes for charge/discharge now come straight from the inverter's own
+  // day counters below — real meter readings, not our own integration — this
+  // accumulator only tracks the proportion of charging that was solar-fed.)
   const today = localDay(snap.ts);
   let acc: any = {};
   try { const raw = await getState(env, "daily_energy", ""); if (raw) acc = JSON.parse(raw); } catch {}
@@ -51,15 +58,50 @@ export async function runSocTick(env: any) {
   acc.last_ts = snap.ts;
   await setState(env, "daily_energy", JSON.stringify(acc));
 
-  // --- 24h discharge integral from history ---
-  let dis24_wh = 0;
-  try {
-    const since = snap.ts - 86400;
-    const res: any = await env.zeekay_power_db.prepare(`SELECT ts,p FROM battery_history WHERE ts>=? ORDER BY ts ASC`).bind(since).all();
-    const rows = res?.results || [];
-    let prevR: any = null;
-    for (const rr of rows) { if (prevR && prevR.p < 0) { const dt = Math.min(600, Math.max(0, rr.ts - prevR.ts)) / 3600; dis24_wh += -prevR.p * dt; } prevR = rr; }
-  } catch {}
+  // Real total charge/discharge today, straight from the inverter's own counters.
+  const realChargeKwh = snap.charge_day_kwh ?? 0;
+  const realDischargeKwh = snap.discharge_day_kwh ?? 0;
+  const splitTotal = (acc.charge_solar_wh || 0) + (acc.charge_wapda_wh || 0);
+  const solarRatio = splitTotal > 0 ? (acc.charge_solar_wh || 0) / splitTotal : 1;
+  const chargeFromSolarKwh = realChargeKwh * solarRatio;
+  const chargeFromWapdaKwh = realChargeKwh * (1 - solarRatio);
+
+  // --- persist today's real counters for billing-cycle / monthly history ---
+  await env.zeekay_power_db.prepare(
+    `INSERT INTO daily_energy_log (date, wapda_import_kwh, solar_kwh, charge_kwh, discharge_kwh, pv_peak_w)
+     VALUES (?,?,?,?,?,?)
+     ON CONFLICT(date) DO UPDATE SET
+       wapda_import_kwh=excluded.wapda_import_kwh, solar_kwh=excluded.solar_kwh,
+       charge_kwh=excluded.charge_kwh, discharge_kwh=excluded.discharge_kwh,
+       pv_peak_w=MAX(daily_energy_log.pv_peak_w, excluded.pv_peak_w)`
+  ).bind(today, r2(snap.wapda_today_kwh) ?? 0, r2(snap.energy_today) ?? 0, r2(realChargeKwh) ?? 0, r2(realDischargeKwh) ?? 0, Math.round(acc.pv_peak_w || 0)).run();
+
+  // --- auto-shift-to-WAPDA (voltage-triggered, fixed-duration) ---
+  let cfg = { ...AUTOSHIFT_DEFAULT };
+  try { const raw = await getState(env, "autoshift_cfg", ""); if (raw) cfg = { ...cfg, ...JSON.parse(raw) }; } catch {}
+  let asState: any = { active: false, trigger_ts: null, until_ts: null, trigger_voltage: null };
+  try { const raw = await getState(env, "autoshift_state", ""); if (raw) asState = { ...asState, ...JSON.parse(raw) }; } catch {}
+
+  if (cfg.enabled && tuya) {
+    const nowTs = snap.ts;
+    if (!asState.active) {
+      if (snap.v <= cfg.threshold_v && !tuya.relay_on) {
+        try {
+          await setTuyaRelay(env, true);
+          asState = { active: true, trigger_ts: nowTs, until_ts: nowTs + cfg.duration_min * 60, trigger_voltage: snap.v };
+          await logEvent(env, "autoshift", "Auto-shift: WAPDA turned ON",
+            `Battery at ${snap.v.toFixed(1)} V (\u2264 ${cfg.threshold_v} V threshold) \u2014 will hold for ${cfg.duration_min} min`);
+        } catch (e: any) { console.error("autoshift ON failed:", e?.message); }
+      }
+    } else if (nowTs >= (asState.until_ts || 0)) {
+      try {
+        await setTuyaRelay(env, false);
+        await logEvent(env, "autoshift", "Auto-shift: WAPDA turned OFF", `${cfg.duration_min} min window elapsed \u2014 reverted to auto`);
+      } catch (e: any) { console.error("autoshift OFF failed:", e?.message); }
+      asState = { active: false, trigger_ts: null, until_ts: null, trigger_voltage: null };
+    }
+    await setState(env, "autoshift_state", JSON.stringify(asState));
+  }
 
   const charging = bp > 20;
   const status = {
@@ -85,16 +127,20 @@ export async function runSocTick(env: any) {
     // grid
     grid_power: Math.round(snap.grid_power || 0),
     frequency: r2((tuya && tuya.frequency_hz) || snap.frequency),
+    wapda_today_kwh: r2(snap.wapda_today_kwh),
     meter_total_kwh: r2(snap.meter_total_kwh),
     ac_voltage: r2(snap.ac_voltage),
-    // energy today
-    charge_from_solar_kwh: r2((acc.charge_solar_wh || 0) / 1000),
-    charge_from_wapda_kwh: r2((acc.charge_wapda_wh || 0) / 1000),
-    total_charge_kwh: r2(((acc.charge_solar_wh || 0) + (acc.charge_wapda_wh || 0)) / 1000),
-    discharge_24h_kwh: r2(dis24_wh / 1000),
+    // energy today (real counters; solar/WAPDA split estimated by ratio)
+    charge_from_solar_kwh: r2(chargeFromSolarKwh),
+    charge_from_wapda_kwh: r2(chargeFromWapdaKwh),
+    total_charge_kwh: r2(realChargeKwh),
+    discharge_today_kwh: r2(realDischargeKwh),
     // breaker
     breaker_online: tuya ? tuya.online : null,
     breaker_energy_kwh: tuya ? tuya.energy_total_kwh : null,
+    // autoshift status (for the settings card)
+    autoshift_active: asState.active,
+    autoshift_until: asState.until_ts ? new Date(asState.until_ts * 1000).toISOString() : null,
     updated_at: new Date().toISOString(),
   };
   await setState(env, "live_status", JSON.stringify(status));

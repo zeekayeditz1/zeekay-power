@@ -91,6 +91,7 @@ async function snapshot(env: any) {
         energy_today: s.pv_today_kwh,
         grid_power: s.grid_power,
         frequency: s.frequency,
+        wapda_today_kwh: s.wapda_today_kwh,
         meter_total_kwh: s.meter_total_kwh,
         wapda,
         relay_state: relayReal,
@@ -99,8 +100,10 @@ async function snapshot(env: any) {
         charge_from_solar_kwh: s.charge_from_solar_kwh,
         charge_from_wapda_kwh: s.charge_from_wapda_kwh,
         total_charge_kwh: s.total_charge_kwh,
-        discharge_24h_kwh: s.discharge_24h_kwh,
+        discharge_today_kwh: s.discharge_today_kwh,
         breaker_online: s.breaker_online,
+        autoshift_active: s.autoshift_active,
+        autoshift_until: s.autoshift_until,
         updated_at: s.updated_at,
       };
     }
@@ -135,7 +138,10 @@ async function snapshot(env: any) {
     charge_from_solar_kwh: 0,
     charge_from_wapda_kwh: 0,
     total_charge_kwh: 0,
-    discharge_24h_kwh: 0,
+    wapda_today_kwh: 0,
+    discharge_today_kwh: 0,
+    autoshift_active: false,
+    autoshift_until: null,
     updated_at: now.toISOString(),
   };
 }
@@ -230,5 +236,97 @@ dashboard.post("/poll", async (c) => {
   const status = await snapshot(c.env as any);
   return c.json({ success: true, polled: true, at: new Date().toISOString(), status });
 });
+
+/* ---------- Auto-shift-to-WAPDA settings (voltage-triggered) ---------- */
+const AUTOSHIFT_DEFAULT = { enabled: false, threshold_v: 45.8, duration_min: 60 };
+
+dashboard.get("/autoshift", async (c) => {
+  const env = c.env as any;
+  let cfg = { ...AUTOSHIFT_DEFAULT };
+  try { const raw = await getState(env, "autoshift_cfg", ""); if (raw) cfg = { ...cfg, ...JSON.parse(raw) }; } catch {}
+  let state: any = { active: false, trigger_ts: null, until_ts: null, trigger_voltage: null };
+  try { const raw = await getState(env, "autoshift_state", ""); if (raw) state = { ...state, ...JSON.parse(raw) }; } catch {}
+  return c.json({
+    success: true,
+    enabled: cfg.enabled,
+    threshold_v: cfg.threshold_v,
+    duration_min: cfg.duration_min,
+    active: state.active,
+    trigger_voltage: state.trigger_voltage,
+    until: state.until_ts ? new Date(state.until_ts * 1000).toISOString() : null,
+  });
+});
+
+dashboard.post("/autoshift", async (c) => {
+  const env = c.env as any;
+  let body: any = {};
+  try { body = await c.req.json(); } catch { /* ignore */ }
+
+  let cfg = { ...AUTOSHIFT_DEFAULT };
+  try { const raw = await getState(env, "autoshift_cfg", ""); if (raw) cfg = { ...cfg, ...JSON.parse(raw) }; } catch {}
+
+  if (typeof body.enabled === "boolean") cfg.enabled = body.enabled;
+  if (body.threshold_v != null) {
+    const v = Number(body.threshold_v);
+    if (!Number.isFinite(v) || v < 40 || v > 58) return c.json({ success: false, error: "threshold_v must be between 40 and 58 V" }, 400);
+    cfg.threshold_v = Math.round(v * 10) / 10;
+  }
+  if (body.duration_min != null) {
+    const m = Number(body.duration_min);
+    if (!Number.isInteger(m) || m < 5 || m > 360) return c.json({ success: false, error: "duration_min must be an integer between 5 and 360" }, 400);
+    cfg.duration_min = m;
+  }
+
+  await setState(env, "autoshift_cfg", JSON.stringify(cfg));
+  await logEvent(env, "autoshift", `Auto-shift settings updated`,
+    `${cfg.enabled ? "Enabled" : "Disabled"} · trigger ≤ ${cfg.threshold_v} V · hold ${cfg.duration_min} min`);
+
+  return c.json({ success: true, ...cfg });
+});
+
+/* ---------- GET /api/history/cycles (WAPDA billing-cycle history, resets on the 22nd) ---------- */
+dashboard.get("/history/cycles", async (c) => {
+  const env = c.env as any;
+  function cycleStartOf(dateStr: string) {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    // cycle runs 22nd of a month -> 21st of the next; day>=22 belongs to the cycle starting THIS month
+    const cy = d >= 22 ? y : (m === 1 ? y - 1 : y);
+    const cm = d >= 22 ? m : (m === 1 ? 12 : m - 1);
+    return `${cy}-${String(cm).padStart(2, "0")}-22`;
+  }
+  function cycleEndOf(cycleStart: string) {
+    const [y, m] = cycleStart.split("-").map(Number);
+    const ny = m === 12 ? y + 1 : y;
+    const nm = m === 12 ? 1 : m + 1;
+    return `${ny}-${String(nm).padStart(2, "0")}-21`;
+  }
+
+  try {
+    const res: any = await env.zeekay_power_db
+      .prepare(`SELECT date, wapda_import_kwh, solar_kwh, charge_kwh, discharge_kwh, pv_peak_w FROM daily_energy_log ORDER BY date ASC`)
+      .all();
+    const rows = res?.results || [];
+    const cycles: Record<string, any> = {};
+    for (const r of rows) {
+      const key = cycleStartOf(r.date);
+      if (!cycles[key]) cycles[key] = { cycle_start: key, cycle_end: cycleEndOf(key), wapda_kwh: 0, solar_kwh: 0, charge_kwh: 0, discharge_kwh: 0, days: 0 };
+      cycles[key].wapda_kwh += r.wapda_import_kwh || 0;
+      cycles[key].solar_kwh += r.solar_kwh || 0;
+      cycles[key].charge_kwh += r.charge_kwh || 0;
+      cycles[key].discharge_kwh += r.discharge_kwh || 0;
+      cycles[key].days += 1;
+    }
+    const today = localDayForCycles();
+    const currentKey = cycleStartOf(today);
+    const list = Object.values(cycles)
+      .map((x: any) => ({ ...x, wapda_kwh: r2c(x.wapda_kwh), solar_kwh: r2c(x.solar_kwh), charge_kwh: r2c(x.charge_kwh), discharge_kwh: r2c(x.discharge_kwh), is_current: x.cycle_start === currentKey }))
+      .sort((a: any, b: any) => (a.cycle_start < b.cycle_start ? 1 : -1));
+    return c.json({ success: true, cycles: list });
+  } catch (e: any) {
+    return c.json({ success: true, cycles: [], error: e?.message });
+  }
+});
+function r2c(x: number) { return Math.round(x * 100) / 100; }
+function localDayForCycles() { return new Date(Date.now() + 5 * 3600 * 1000).toISOString().slice(0, 10); }
 
 export default dashboard;

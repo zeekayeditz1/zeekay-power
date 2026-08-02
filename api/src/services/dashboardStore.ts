@@ -42,6 +42,13 @@ export async function ensureTables(env: StoreEnv): Promise<void> {
         bms_soc REAL, anchored INTEGER
       )`
     ),
+    env.zeekay_power_db.prepare(
+      `CREATE TABLE IF NOT EXISTS daily_energy_log (
+        date TEXT PRIMARY KEY,
+        wapda_import_kwh REAL, solar_kwh REAL,
+        charge_kwh REAL, discharge_kwh REAL, pv_peak_w REAL
+      )`
+    ),
   ]);
 
   // Seed a couple of events the first time so the panel isn't empty.

@@ -231,7 +231,31 @@
   @keyframes shim{to{background-position:-200% 0}}
 
   /* --- rich dashboard additions --- */
-  .stack{display:grid;gap:16px;max-width:600px;margin:0 auto;width:100%}
+  .stack{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;max-width:1240px;margin:0 auto;width:100%;align-items:start}
+  .stack .span-full{grid-column:1/-1}
+  .stack .span-half{grid-column:span 2}
+  @media(max-width:720px){.stack .span-half{grid-column:1/-1}}
+  /* important values in the app's accent green */
+  .big-card .bc-main .big.mono{color:var(--accent)}
+  .tile .tv{color:var(--accent)}
+  .now .mono{color:var(--accent)}
+  .cd-row + .tiles .tile .tv, #dTotal{color:var(--accent)}
+  /* settings form */
+  .settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0}
+  .settings-grid label{display:block;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}
+  .settings-grid input{width:100%;background:rgba(255,255,255,.04);border:1px solid var(--stroke);border-radius:10px;padding:10px 12px;color:var(--txt);font-family:var(--font);font-size:15px;box-sizing:border-box}
+  .settings-grid input:focus{outline:none;border-color:var(--accent)}
+  @media(max-width:520px){.settings-grid{grid-template-columns:1fr}}
+  .as-status{font-size:12.5px;color:var(--muted);margin:2px 0 14px}
+  .as-status b{color:var(--accent)}
+  /* billing-cycle list */
+  .cycles-list{display:grid;gap:10px;margin-top:6px}
+  .cycle-row{display:flex;justify-content:space-between;align-items:center;gap:10px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:12px;padding:11px 14px;flex-wrap:wrap}
+  .cycle-row.current{border-color:rgba(55,245,181,.4)}
+  .cycle-row .cr-range{font-size:12.5px;color:var(--muted)}
+  .cycle-row .cr-vals{display:flex;gap:14px;font-size:13px}
+  .cycle-row .cr-vals b{color:var(--accent)}
+  .cycles-note{font-size:11.5px;color:var(--faint);margin-top:10px}
   .big-card .bc-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px}
   .big-card .bc-head h3{margin:0}
   .big-card .bc-main{display:flex;align-items:baseline;gap:10px;margin:4px 0 10px}
@@ -319,7 +343,7 @@
       <div class="sub" id="kGridSub">mains status</div>
     </div>
 
-    <div class="card">
+    <div class="card span-full">
       <div class="chart-head">
         <div><h3 style="margin-bottom:6px">State of charge</h3><div class="now"><span class="mono" id="socNow">--</span><small>% now</small></div></div>
         <div class="seg" id="rangeSeg"><button data-h="6">6h</button><button data-h="12">12h</button><button data-h="24" class="active">24h</button></div>
@@ -327,10 +351,11 @@
       <canvas id="socChart" height="220"></canvas>
     </div>
 
-    <div class="tiles">
+    <div class="tiles span-full">
       <div class="tile"><div class="tk">Grid power</div><div class="tv mono"><span id="tGrid">--</span> <small>W</small></div></div>
       <div class="tile"><div class="tk">Frequency</div><div class="tv mono"><span id="tFreq">--</span> <small>Hz</small></div></div>
-      <div class="tile"><div class="tk">Meter total</div><div class="tv mono"><span id="tMeter">--</span> <small>kWh</small></div></div>
+      <div class="tile"><div class="tk">WAPDA today</div><div class="tv mono"><span id="tWapdaToday">--</span> <small>kWh</small></div></div>
+      <div class="tile"><div class="tk">Meter total (lifetime)</div><div class="tv mono"><span id="tMeter">--</span> <small>kWh</small></div></div>
       <div class="tile"><div class="tk">PV today</div><div class="tv mono"><span id="tPvToday">--</span> <small>kWh</small></div></div>
       <div class="tile"><div class="tk">PV peak today</div><div class="tv mono"><span id="tPvPeak">--</span> <small>W</small></div></div>
       <div class="tile"><div class="tk">Voltage · Current</div><div class="tv mono" id="tVI">-- / --</div></div>
@@ -346,7 +371,7 @@
       </div>
     </div>
 
-    <div class="card">
+    <div class="card span-full">
       <div class="cd-head"><span class="cd-title">Charge &amp; Discharge</span><span class="cd-sub">today · cloud-metered from battery V×A</span></div>
       <div class="cd-sec">
         <div class="cd-row"><span>Charging</span><span class="faint">energy into the bank</span></div>
@@ -360,7 +385,7 @@
       </div>
       <div class="cd-sec">
         <div class="cd-row"><span>Discharging</span><span class="faint">energy drawn from the bank</span></div>
-        <div class="tile"><div class="tk">Total discharge (24h)</div><div class="tv mono"><span id="dTotal">--</span> <small>kWh</small></div></div>
+        <div class="tile"><div class="tk">Total discharge (today)</div><div class="tv mono"><span id="dTotal">--</span> <small>kWh</small></div></div>
       </div>
     </div>
 
@@ -376,6 +401,32 @@
         <span class="chip">Updated <b id="relayUpd">—</b></span>
       </div>
       <button class="ghost-btn" id="pollBtn">⟳ Force poll now</button>
+    </div>
+
+    <div class="card span-full">
+      <div class="cd-head"><span class="cd-title">Auto-shift to WAPDA</span><span class="cd-sub">turns mains ON for a fixed window when the battery gets low</span></div>
+      <div class="relay-row">
+        <div><div class="label">Enable auto-shift</div><div class="desc">When ON, the cloud will close the WAPDA relay automatically once battery voltage drops to the trigger below, and hold it for the configured duration.</div></div>
+        <div class="toggle" id="asToggle" role="switch" aria-checked="false" tabindex="0"><i></i></div>
+      </div>
+      <div class="settings-grid">
+        <div>
+          <label>Trigger battery voltage (V)</label>
+          <input type="number" id="asThreshold" step="0.1" min="40" max="58" value="45.8">
+        </div>
+        <div>
+          <label>Hold duration (minutes)</label>
+          <input type="number" id="asDuration" step="5" min="5" max="360" value="60">
+        </div>
+      </div>
+      <div class="as-status" id="asStatus">Loading settings…</div>
+      <button class="ghost-btn" id="asSaveBtn">Save auto-shift settings</button>
+    </div>
+
+    <div class="card span-full">
+      <div class="cd-head"><span class="cd-title">WAPDA usage — billing cycle</span><span class="cd-sub">resets on the 22nd of every month</span></div>
+      <div class="cycles-list" id="cyclesList"><div class="cycles-note">Loading…</div></div>
+      <div class="cycles-note">History builds forward from the day this dashboard went live — earlier months have no data to show yet.</div>
     </div>
 
     <div class="card">
@@ -500,6 +551,7 @@
     $("socNow").textContent = fmt(soc,0);
     if($("tGrid")) $("tGrid").textContent = fmt(s.grid_power,0);
     if($("tFreq")) $("tFreq").textContent = fmt(s.frequency,1);
+    if($("tWapdaToday")) $("tWapdaToday").textContent = fmt(s.wapda_today_kwh,2);
     if($("tMeter")) $("tMeter").textContent = fmt(s.meter_total_kwh,1);
     if($("tPvToday")) $("tPvToday").textContent = fmt(s.pv_today_kwh,2);
     if($("tPvPeak")) $("tPvPeak").textContent = fmt(s.solar_peak_today,0);
@@ -519,12 +571,67 @@
     if($("cSolar")) $("cSolar").textContent = fmt(s.charge_from_solar_kwh,2);
     if($("cWapda")) $("cWapda").textContent = fmt(s.charge_from_wapda_kwh,2);
     if($("cTotal")) $("cTotal").textContent = fmt(s.total_charge_kwh,2);
-    if($("dTotal")) $("dTotal").textContent = fmt(s.discharge_24h_kwh,2);
+    if($("dTotal")) $("dTotal").textContent = fmt(s.discharge_today_kwh,2);
     const cs=s.charge_from_solar_kwh||0, cw=s.charge_from_wapda_kwh||0, ct=cs+cw;
     if($("cdBarSolar")) $("cdBarSolar").style.width = (ct>0?(cs/ct*100):100)+"%";
     if($("cdBarWapda")) $("cdBarWapda").style.width = (ct>0?(cw/ct*100):0)+"%";
     setConn("live");
   }
+
+  /* ---------------- auto-shift-to-WAPDA settings ---------------- */
+  let asBusy = false;
+  function fmtTime(iso){ if(!iso) return "--"; try{ return new Date(iso).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}); }catch(e){ return "--"; } }
+  async function loadAutoshift(){
+    try{
+      const r = await api("/api/autoshift");
+      if(!r || r.success===false) return;
+      $("asToggle").classList.toggle("on", !!r.enabled);
+      $("asToggle").setAttribute("aria-checked", r.enabled?"true":"false");
+      if(document.activeElement!==$("asThreshold")) $("asThreshold").value = r.threshold_v;
+      if(document.activeElement!==$("asDuration")) $("asDuration").value = r.duration_min;
+      let msg;
+      if(r.active) msg = "Active now — WAPDA held ON until "+fmtTime(r.until)+" (triggered at "+fmt(r.trigger_voltage,1)+" V)";
+      else if(r.enabled) msg = "Watching — will turn WAPDA ON for "+r.duration_min+" min if battery drops to "+fmt(r.threshold_v,1)+" V";
+      else msg = "Disabled — battery voltage will not auto-switch WAPDA";
+      $("asStatus").textContent = msg;
+    }catch(e){ /* leave last known state on screen */ }
+  }
+  async function saveAutoshift(){
+    if(asBusy) return; asBusy=true;
+    const btn=$("asSaveBtn"); const orig=btn.textContent; btn.disabled=true; btn.textContent="Saving…";
+    try{
+      const enabled = $("asToggle").classList.contains("on");
+      const threshold_v = parseFloat($("asThreshold").value);
+      const duration_min = parseInt($("asDuration").value,10);
+      const r = await api("/api/autoshift",{method:"POST",body:JSON.stringify({enabled,threshold_v,duration_min})});
+      if(r && r.success===false) throw new Error(r.error||"save failed");
+      toast("Auto-shift settings saved","ok");
+      await loadAutoshift(); loadEvents();
+    }catch(e){ toast(e.message||"Could not save settings","err"); }
+    finally{ btn.disabled=false; btn.textContent=orig; asBusy=false; }
+  }
+
+  /* ---------------- WAPDA billing-cycle history ---------------- */
+  function renderCycles(list){
+    const el = $("cyclesList");
+    if(!list || !list.length){ el.innerHTML = '<div class="cycles-note">No completed cycles yet.</div>'; return; }
+    el.innerHTML = list.map(c=>{
+      const range = fmtDate(c.cycle_start)+" – "+fmtDate(c.cycle_end);
+      return `<div class="cycle-row${c.is_current?' current':''}">
+        <div><div class="cr-range">${range}${c.is_current?' · current cycle':''}</div></div>
+        <div class="cr-vals">
+          <span>WAPDA <b>${fmt(c.wapda_kwh,2)}</b> kWh</span>
+          <span>Solar <b>${fmt(c.solar_kwh,2)}</b> kWh</span>
+        </div>
+      </div>`;
+    }).join("");
+  }
+  function fmtDate(d){ if(!d) return "--"; const [y,m,dd]=d.split("-"); const months=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]; return dd+" "+months[parseInt(m,10)-1]; }
+  async function loadCycles(){
+    try{ const r = await api("/api/history/cycles"); renderCycles((r&&r.cycles)||[]); }
+    catch(e){ /* keep whatever was last shown */ }
+  }
+
 
   /* ---------------- SOC chart (vanilla canvas) ---------------- */
   function drawChart(points){
@@ -618,10 +725,10 @@
   async function boot(){
     setConn("connecting");
     skeleton();
-    await Promise.all([loadStatus(), loadHistory(), loadEvents()]);
+    await Promise.all([loadStatus(), loadHistory(), loadEvents(), loadAutoshift(), loadCycles()]);
     if(pollTimer) clearInterval(pollTimer);
-    pollTimer = setInterval(()=>{ loadStatus(); loadEvents(); }, 15000);
-    setInterval(()=>{ if(document.getElementById("app").style.display!=="none") loadHistory(); }, 60000);
+    pollTimer = setInterval(()=>{ loadStatus(); loadEvents(); loadAutoshift(); }, 15000);
+    setInterval(()=>{ if(document.getElementById("app").style.display!=="none") { loadHistory(); loadCycles(); } }, 60000);
   }
 
   /* ---------------- controls ---------------- */
@@ -650,7 +757,10 @@
     finally{ b.disabled=false; b.textContent=o; }
   });
 
-  $("refreshBtn").addEventListener("click", ()=>{ loadStatus(); loadHistory(); loadEvents(); });
+  $("refreshBtn").addEventListener("click", ()=>{ loadStatus(); loadHistory(); loadEvents(); loadAutoshift(); loadCycles(); });
+  $("asToggle").addEventListener("click", ()=>{ $("asToggle").classList.toggle("on"); });
+  $("asToggle").addEventListener("keydown",(e)=>{ if(e.key===" "||e.key==="Enter"){ e.preventDefault(); $("asToggle").classList.toggle("on"); } });
+  $("asSaveBtn").addEventListener("click", saveAutoshift);
 
   $("rangeSeg").addEventListener("click",(e)=>{
     const btn=e.target.closest("button"); if(!btn) return;
