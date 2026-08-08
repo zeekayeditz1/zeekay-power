@@ -505,13 +505,16 @@
   let token = null;
   try { token = localStorage.getItem(TOKEN_KEY); } catch(e){}
   let pollTimer = null;
+  let slowTimer = null;
   let chartRange = 24;
   let lastStatus = null;
+  let relayBusy = false;
+  let statusBusy = false;
 
   /* ---------------- helpers ---------------- */
   function toast(msg, kind){
     const t = $("toast");
-    t.innerHTML = (kind==="err"?"⚠️ ":kind==="ok"?"✅ ":"")+msg;
+    t.textContent = (kind==="err"?"⚠️ ":kind==="ok"?"✅ ":"")+String(msg||"");
     t.classList.add("show");
     clearTimeout(t._t); t._t = setTimeout(()=>t.classList.remove("show"), 2600);
   }
@@ -548,6 +551,7 @@
     token=null;
     try{ localStorage.removeItem(TOKEN_KEY); }catch(e){}
     if(pollTimer){ clearInterval(pollTimer); pollTimer=null; }
+    if(slowTimer){ clearInterval(slowTimer); slowTimer=null; }
     showLogin();
     if(!silent) toast("Signed out","ok");
   }
@@ -592,9 +596,9 @@
   }
   function render(s){
     lastStatus = s;
-    const soc = s.battery_soc||0;
+    const soc = s.battery_soc!=null && Number.isFinite(Number(s.battery_soc)) ? Number(s.battery_soc) : null;
     $("kBatt").textContent = fmt(soc,0);
-    $("battBar").style.width = Math.max(0,Math.min(100,soc))+"%";
+    $("battBar").style.width = (soc==null?0:Math.max(0,Math.min(100,soc)))+"%";
     if($("battLabel")) $("battLabel").textContent = s.battery_soc_label||"—";
     $("kBattSub").textContent = "inverter: "+(s.bms_soc!=null?fmt(s.bms_soc,0)+"%":"—")+" · "+(s.battery_voltage!=null?fmt(s.battery_voltage,1)+" V":"— V");
     $("kSolar").textContent = fmt(s.solar_power,0);
@@ -604,7 +608,7 @@
     $("kLoadSub").textContent = bp>20?("battery charging "+fmt(bp,0)+" W"):bp<-20?("battery discharging "+fmt(-bp,0)+" W"):"battery idle";
     $("kGrid").textContent = s.wapda?"ON":"OFF";
     $("kGrid").className = "big "+(s.wapda?"ok":"bad");
-    $("kGridSub").textContent = (s.wapda?"mains available":"running on battery")+" · relay "+(s.relay_closed?"closed":"open");
+    $("kGridSub").textContent = (s.wapda?"mains available":s.data_available===false?"telemetry unavailable":"running on battery")+" · relay "+(s.relay_closed?"closed":"open");
     $("socNow").textContent = fmt(soc,0);
     if($("tGrid")) $("tGrid").textContent = fmt(s.grid_power,0);
     if($("tFreq")) $("tFreq").textContent = fmt(s.frequency,1);
@@ -632,7 +636,7 @@
     const cs=s.charge_from_solar_kwh||0, cw=s.charge_from_wapda_kwh||0, ct=cs+cw;
     if($("cdBarSolar")) $("cdBarSolar").style.width = (ct>0?(cs/ct*100):100)+"%";
     if($("cdBarWapda")) $("cdBarWapda").style.width = (ct>0?(cw/ct*100):0)+"%";
-    setConn("live");
+    setConn(s.stale || s.data_available===false ? "warn" : "live");
   }
 
   /* ---------------- auto-shift-to-WAPDA settings ---------------- */
@@ -648,7 +652,8 @@
       if(document.activeElement!==$("asDuration")) $("asDuration").value = r.duration_min;
       if(document.activeElement!==$("asPvStop")) $("asPvStop").value = r.pv_stop_w;
       let msg;
-      if(r.charging) msg = "Charging now — WAPDA confirmed present, held until "+fmtTime(r.until)+" at the latest (triggered at "+fmt(r.trigger_voltage,1)+" V) — ends sooner if PV reaches "+fmt(r.pv_stop_w,0)+" W";
+      if(r.stopping) msg = "Turning WAPDA OFF — waiting for physical relay confirmation; the cloud controller will retry each minute";
+      else if(r.charging) msg = "Charging now — WAPDA confirmed present, held until "+fmtTime(r.until)+" at the latest (triggered at "+fmt(r.trigger_voltage,1)+" V) — ends sooner if PV reaches "+fmt(r.pv_stop_w,0)+" W";
       else if(r.active) msg = "Waiting for WAPDA — relay closed, battery at "+fmt(r.trigger_voltage,1)+" V, rechecking every minute for real grid power (a full "+r.duration_min+"-min charge starts the instant it's confirmed)";
       else if(r.enabled) msg = "Watching, 6 PM–6 AM only — closes WAPDA relay if battery drops to "+fmt(r.threshold_v,1)+" V, waits for real grid before charging, ends early once PV hits "+fmt(r.pv_stop_w,0)+" W";
       else msg = "Disabled — battery voltage will not auto-switch WAPDA";
@@ -704,7 +709,7 @@
           <span class="ak-scope${k.scope==='full'?' full':''}">${k.scope==='full'?'full access':'read-only'}</span>
           <div class="ak-meta">${meta}${k.revoked?' · revoked':''}</div>
         </div>
-        ${k.revoked?'':`<button class="ak-revoke-btn" data-id="${k.id}">Revoke</button>`}
+        ${k.revoked?'':`<button class="ak-revoke-btn" data-id="${escapeHtml(k.id)}">Revoke</button>`}
       </div>`;
     }).join("");
     el.querySelectorAll(".ak-revoke-btn").forEach(btn=>{
@@ -818,12 +823,14 @@
 
   /* ---------------- status polling ---------------- */
   async function loadStatus(){
+    if(statusBusy) return;
+    statusBusy = true;
     try{
       const r = await api("/api/status");
       render(r&&r.status?r.status:r);
     }catch(e){
       if(e.message!=="unauthorized"){ setConn("warn"); }
-    }
+    }finally{ statusBusy=false; }
   }
 
   function skeleton(){
@@ -836,12 +843,15 @@
     skeleton();
     await Promise.all([loadStatus(), loadHistory(), loadEvents(), loadAutoshift(), loadCycles(), loadApiKeys()]);
     if(pollTimer) clearInterval(pollTimer);
+    if(slowTimer) clearInterval(slowTimer);
     pollTimer = setInterval(()=>{ loadStatus(); loadEvents(); loadAutoshift(); }, 15000);
-    setInterval(()=>{ if(document.getElementById("app").style.display!=="none") { loadHistory(); loadCycles(); } }, 60000);
+    slowTimer = setInterval(()=>{ if(document.getElementById("app").style.display!=="none") { loadHistory(); loadCycles(); } }, 60000);
   }
 
   /* ---------------- controls ---------------- */
   async function setRelay(next){
+    if(relayBusy) return;
+    relayBusy = true;
     const tg=$("relayToggle");
     tg.classList.add("busy");
     try{
@@ -851,7 +861,7 @@
     }catch(e){
       toast(e.message||"Relay command failed","err");
       if(lastStatus) render(lastStatus);
-    }finally{ tg.classList.remove("busy"); }
+    }finally{ tg.classList.remove("busy"); relayBusy=false; }
   }
   $("relayToggle").addEventListener("click", ()=>{
     if(!lastStatus) return;

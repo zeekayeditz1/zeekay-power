@@ -1,10 +1,10 @@
 import { Hono } from "hono";
-import { cors } from "hono/cors";
 
 import authRoutes from "./routes/auth";
 import userRoutes from "./routes/user";
 import dashboardRoutes from "./routes/dashboard";
 import apiKeyRoutes from "./routes/apiKeys";
+import { authMiddleware } from "./middleware/auth";
 import { runSocTick } from "./services/socPipeline";
 
 export interface Env {
@@ -25,21 +25,17 @@ export interface Env {
 
 const app = new Hono<{ Bindings: Env }>();
 
-app.use(
-  "*",
-  cors({
-    origin: "*",
-    allowHeaders: ["Content-Type", "Authorization"],
-    allowMethods: [
-      "GET",
-      "POST",
-      "PUT",
-      "PATCH",
-      "DELETE",
-      "OPTIONS",
-    ],
-  })
-);
+// The dashboard is served from this same worker, so there is no cross-origin
+// caller to permit — dropping the wildcard CORS policy and sending strict
+// security headers instead.
+app.use("*", async (c, next) => {
+  await next();
+  c.header("X-Content-Type-Options", "nosniff");
+  c.header("X-Frame-Options", "DENY");
+  c.header("Referrer-Policy", "no-referrer");
+  c.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  if (c.req.path.startsWith("/api/")) c.header("Cache-Control", "no-store");
+});
 
 /*
 |--------------------------------------------------------------------------
@@ -50,7 +46,7 @@ app.use(
 app.get("/", (c) => {
   return c.json({
     success: true,
-    app: c.env.APP_NAME,
+    app: c.env.APP_NAME || "Zeekay Power",
     message: "Zeekay Power API",
   });
 });
@@ -64,7 +60,7 @@ app.get("/", (c) => {
 app.get("/api/health", (c) => {
   return c.json({
     success: true,
-    app: c.env.APP_NAME,
+    app: c.env.APP_NAME || "Zeekay Power",
     version: "1.0.0",
     status: "online",
     timestamp: new Date().toISOString(),
@@ -77,7 +73,7 @@ app.get("/api/health", (c) => {
 |--------------------------------------------------------------------------
 */
 
-app.get("/api/db-test", async (c) => {
+app.get("/api/db-test", authMiddleware, async (c) => {
   try {
     const result = await c.env.zeekay_power_db
       .prepare("SELECT COUNT(*) AS total FROM users")
@@ -89,11 +85,12 @@ app.get("/api/db-test", async (c) => {
       users: result?.total ?? 0,
     });
   } catch (error: any) {
+    console.error("db health check failed:", error?.message);
     return c.json(
       {
         success: false,
         database: "Disconnected",
-        error: error.message,
+        message: "Database health check failed",
       },
       500
     );
@@ -140,7 +137,6 @@ app.onError((err, c) => {
     {
       success: false,
       message: "Internal Server Error",
-      error: err.message,
     },
     500
   );

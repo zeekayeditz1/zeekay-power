@@ -25,8 +25,13 @@ function randomKey(): string {
   let b64 = btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   return PREFIX + b64;
 }
+/** Exact shape of a key produced by randomKey(): "zk_" + 43 base64url chars
+ *  (32 random bytes, unpadded). Matching the full shape — not just the prefix —
+ *  keeps malformed credentials out of the D1 lookup path entirely. */
+const KEY_PATTERN = /^zk_[A-Za-z0-9_-]{43}$/;
+
 export function looksLikeApiKey(token: string): boolean {
-  return token.startsWith(PREFIX);
+  return KEY_PATTERN.test(token);
 }
 
 export async function createApiKey(env: ApiKeyEnv, name: string, scope: ApiKeyScope) {
@@ -62,6 +67,19 @@ export async function validateApiKey(env: ApiKeyEnv, presented: string): Promise
     .bind(hash)
     .first();
   if (!row || row.revoked) return null;
-  try { await env.zeekay_power_db.prepare(`UPDATE api_keys SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(row.id).run(); } catch {}
+  if (row.scope !== "full" && row.scope !== "read_only") return null;
+  // Bump last_used_at at most once every 5 minutes — a polling client would
+  // otherwise write to D1 on every single request.
+  try {
+    await env.zeekay_power_db
+      .prepare(
+        `UPDATE api_keys
+       SET last_used_at = CURRENT_TIMESTAMP
+       WHERE id = ?
+         AND (last_used_at IS NULL OR last_used_at < datetime('now', '-5 minutes'))`
+      )
+      .bind(row.id)
+      .run();
+  } catch {}
   return { ...row, revoked: !!row.revoked };
 }

@@ -52,6 +52,16 @@ export async function authMiddleware(
       );
     }
 
+    if (token.length > 4096) {
+      return c.json(
+        {
+          success: false,
+          message: "Credential is too long",
+        },
+        401
+      );
+    }
+
     const env = c.env as any;
 
     // API keys (prefix "zk_") are a separate credential from the browser JWT
@@ -82,7 +92,6 @@ export async function authMiddleware(
       {
         success: false,
         message: "Invalid or expired token",
-        error: error.message,
       },
       401
     );

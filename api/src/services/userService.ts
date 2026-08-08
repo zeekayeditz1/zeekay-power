@@ -56,25 +56,6 @@ export async function getUserById(
   return user ?? null;
 }
 
-export async function emailExists(
-  env: Env,
-  email: string
-): Promise<boolean> {
-  const user = await env.zeekay_power_db
-    .prepare(
-      `
-      SELECT id
-      FROM users
-      WHERE email = ?
-      LIMIT 1
-      `
-    )
-    .bind(email.toLowerCase())
-    .first();
-
-  return user !== null;
-}
-
 export async function countUsers(env: Env): Promise<number> {
   const row = await env.zeekay_power_db
     .prepare(`SELECT COUNT(*) AS n FROM users`)
@@ -83,33 +64,26 @@ export async function countUsers(env: Env): Promise<number> {
   return row?.n ?? 0;
 }
 
-export async function createUser(
+/*
+| Bootstrap the single dashboard account. The "is the table empty?" check and
+| the INSERT are one atomic statement (INSERT ... SELECT ... WHERE NOT EXISTS),
+| so two concurrent registration requests can never both create an account —
+| the loser inserts zero rows and gets null back.
+*/
+export async function createFirstUser(
   env: Env,
   data: CreateUserInput
-): Promise<string> {
+): Promise<string | null> {
 
   const passwordHash = await hashPassword(data.password);
 
   const id = crypto.randomUUID();
 
-  await env.zeekay_power_db
+  const result: any = await env.zeekay_power_db
     .prepare(
-      `
-      INSERT INTO users
-      (
-        id,
-        name,
-        email,
-        password_hash
-      )
-      VALUES
-      (
-        ?,
-        ?,
-        ?,
-        ?
-      )
-      `
+      `INSERT INTO users (id, name, email, password_hash)
+       SELECT ?, ?, ?, ?
+       WHERE NOT EXISTS (SELECT 1 FROM users)`
     )
     .bind(
       id,
@@ -119,7 +93,7 @@ export async function createUser(
     )
     .run();
 
-  return id;
+  return (result.meta?.changes ?? 0) > 0 ? id : null;
 }
 
 export async function deleteUser(

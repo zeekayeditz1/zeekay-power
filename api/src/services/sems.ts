@@ -13,17 +13,41 @@ export interface Env {
 }
 
 const BASE = "https://hk.semsportal.com";
+// A hung upstream must not hold the whole cron tick open — every SEMS call is
+// bounded so a stall surfaces as a normal error instead of a stuck worker.
+const REQUEST_TIMEOUT_MS = 12000;
 const okCode = (c: any) => String(c) === "0";
 const numOf = (x: any) => { const n = parseFloat(String(x)); return Number.isFinite(n) ? n : null; };
 
+async function fetchJson(url: string, init: RequestInit, operation: string): Promise<any> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    if (!response.ok) throw new Error(`${operation} HTTP ${response.status}`);
+    try {
+      return await response.json();
+    } catch {
+      throw new Error(`${operation} returned invalid JSON`);
+    }
+  } catch (error: any) {
+    if (error?.name === "AbortError") throw new Error(`${operation} timed out`);
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function crossLogin(env: Env) {
-  const r = await fetch(`${BASE}/api/v2/Common/CrossLogin`, {
+  if (!env.SEMS_EMAIL || !env.SEMS_PASSWORD || !env.SEMS_STATION_ID) {
+    throw new Error("SEMS is not configured");
+  }
+  const d: any = await fetchJson(`${BASE}/api/v2/Common/CrossLogin`, {
     method: "POST",
     headers: { "Content-Type": "application/json",
       Token: JSON.stringify({ version: "v2.1.0", client: "web", language: "en" }) },
     body: JSON.stringify({ account: env.SEMS_EMAIL, pwd: env.SEMS_PASSWORD }),
-  });
-  const d: any = await r.json();
+  }, "SEMS login");
   if (!okCode(d.code) || !d.data) throw new Error(`SEMS login failed: code=${d.code} msg=${d.msg}`);
   const tok = { ...d.data, exp: Date.now() + 50 * 60000 };
   await setState(env as any, "sems_token", JSON.stringify(tok));
@@ -37,18 +61,21 @@ async function getToken(env: Env) {
   return crossLogin(env);
 }
 async function monitorCall(tok: any, station: string) {
-  const r = await fetch(`${BASE}/api/v3/PowerStation/GetMonitorDetailByPowerstationId`, {
+  return fetchJson(`${BASE}/api/v3/PowerStation/GetMonitorDetailByPowerstationId`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Token: JSON.stringify(tok) },
     body: JSON.stringify({ powerStationId: station }),
-  });
-  return r.json() as Promise<any>;
+  }, "SEMS monitor");
 }
 
 export interface SemsSnapshot {
   v: number | null; p_chg: number | null; ts: number; bms_soc: number | null;
   solar_power: number | null; load_power: number | null; grid_power: number | null;
-  ac_voltage: number | null;
+  /* Inverter OUTPUT voltage — the AC the house runs on. It is present whether
+     the load is fed by battery, solar or WAPDA, so it is never evidence that
+     mains is available. (Named ac_voltage before, which invited exactly that
+     mistake.) */
+  output_voltage: number | null;
   energy_today: number | null;
   load_voltage: number | null;
   load_current: number | null;
@@ -81,7 +108,7 @@ export async function fetchSemsSnapshot(env: Env): Promise<SemsSnapshot> {
     solar_power: numOf(pf.pv),
     load_power: numOf(pf.load),
     grid_power: numOf(pf.grid),
-    ac_voltage: numOf(full.vload ?? full.output_voltage ?? inv.output_voltage),
+    output_voltage: numOf(full.vload ?? full.output_voltage ?? inv.output_voltage),
     energy_today: numOf(full.eday ?? inv.eday),
     load_voltage: numOf(full.vload),
     load_current: numOf(full.iload),
