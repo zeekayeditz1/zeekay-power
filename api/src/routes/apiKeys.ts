@@ -30,11 +30,22 @@ apiKeys.get("/", async (c) => {
 
 /* ---------- POST /api/keys { name, scope } — create, returns plaintext ONCE ---------- */
 apiKeys.post("/", async (c) => {
-  let body: any = {};
-  try { body = await c.req.json(); } catch { /* ignore */ }
+  let body: any;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ success: false, message: "A JSON body is required" }, 400);
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return c.json({ success: false, message: "Invalid API-key request" }, 400);
+  }
 
   const name = (typeof body.name === "string" && body.name.trim()) ? body.name.trim().slice(0, 64) : "Unnamed key";
-  const scope: ApiKeyScope = body.scope === "read_only" ? "read_only" : "full";
+  if (body.scope != null && body.scope !== "read_only" && body.scope !== "full") {
+    return c.json({ success: false, message: "scope must be read_only or full" }, 400);
+  }
+  // Default to the least privilege — a caller must explicitly ask for "full".
+  const scope: ApiKeyScope = body.scope === "full" ? "full" : "read_only";
 
   const created = await createApiKey(c.env as any, name, scope);
   await logEvent(c.env as any, "apikey", "API key created", `"${name}" (${scope === "read_only" ? "read-only" : "full access"})`);

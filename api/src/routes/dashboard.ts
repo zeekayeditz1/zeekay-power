@@ -1,24 +1,35 @@
 import { Hono } from "hono";
-import { authMiddleware } from "../middleware/auth";
+import { authMiddleware, requireFullAccess } from "../middleware/auth";
 import {
   ensureTables,
   getState,
   setState,
   logEvent,
   getEvents,
+  acquireTickLock,
+  releaseTickLock,
 } from "../services/dashboardStore";
 import { runSocTick } from "../services/socPipeline";
-import { requireFullAccess } from "../middleware/auth";
-import { setTuyaRelay, fetchTuyaStatus } from "../services/tuya";
+import { setTuyaRelayAndConfirm } from "../services/tuya";
+import {
+  AUTOSHIFT_DEFAULT,
+  AutoshiftConfig,
+  GridSignals,
+  isGridConnected,
+  isMainsAvailable,
+  normalizeAutoshiftConfig,
+  normalizeAutoshiftState,
+} from "../services/autoshift";
 
 /*
 |--------------------------------------------------------------------------
-| Dashboard routes (JWT protected)
+| Dashboard routes (JWT or API key protected)
 |--------------------------------------------------------------------------
-| These power the Zeekay Power control center UI. Live values are currently
-| generated from a self-consistent demo model so the dashboard is fully
-| functional today. Each place that should read/write real hardware is
-| marked with `TODO(tuya)` / `TODO(sems)` for drop-in wiring later.
+| These power the Zeekay Power control center UI. Every value served here
+| comes from real hardware — the SEMS+ inverter feed and the Tuya WAPDA
+| breaker — via the once-a-minute pipeline in services/socPipeline.ts. When
+| that data is missing or stale the response says so explicitly rather than
+| substituting a plausible-looking number.
 |--------------------------------------------------------------------------
 */
 
@@ -30,47 +41,48 @@ dashboard.use("*", async (c, next) => {
 });
 dashboard.use("*", authMiddleware);
 
-/* ---------- shared, self-consistent demo model ---------- */
-
-// 0 at night, 1 at solar noon (approx 06:00–18:00 daylight window)
-function daylight(d: Date): number {
-  const mins = d.getHours() * 60 + d.getMinutes();
-  return Math.max(0, Math.sin(((mins - 360) / 720) * Math.PI));
-}
-
-function socAt(d: Date): number {
-  // 45% overnight floor rising toward ~90% at peak sun
-  return Math.round(45 + 45 * daylight(d));
-}
-
-function solarAt(d: Date): number {
-  return Math.round(3200 * daylight(d));
-}
-
 function toIso(s: string | null): string | null {
   if (!s) return s;
   return s.includes("T") ? s : s.replace(" ", "T") + "Z";
 }
 
 async function snapshot(env: any) {
-  const now = new Date();
-  const relay = parseInt(await getState(env, "relay_state", "1"), 10) === 1 ? 1 : 0;
+  const relay = parseInt(await getState(env, "relay_state", "0"), 10) === 1 ? 1 : 0;
   const mode = await getState(env, "mode", "auto");
+
+  let tuya: any = null;
+  try { const traw = await getState(env, "tuya_status", ""); if (traw) tuya = JSON.parse(traw); } catch {}
+  const relayReal = tuya ? (tuya.relay_on ? 1 : 0) : relay;
 
   try {
     const raw = await getState(env, "live_status", "");
     if (raw) {
       const s = JSON.parse(raw);
-      let tuya: any = null;
-      try { const traw = await getState(env, "tuya_status", ""); if (traw) tuya = JSON.parse(traw); } catch {}
-      const relayReal = tuya ? (tuya.relay_on ? 1 : 0) : relay;
-      const wapda = (s.grid_power ?? 0) > 5 || (s.ac_voltage ?? 0) > 50 || ((tuya?.grid_voltage ?? 0) > 50);
-      const soc = s.battery_soc ?? 0;
-      const socLabel = soc >= 70 ? "HIGH" : soc >= 35 ? "MEDIUM" : "LOW";
+      const signals: GridSignals = {
+        relayOn: relayReal === 1,
+        tuyaOnline: tuya?.online ?? s.breaker_online ?? null,
+        semsGridPower: s.grid_power,
+        tuyaGridPower: tuya?.grid_power,
+        tuyaGridVoltage: tuya?.grid_voltage ?? s.grid_voltage,
+      };
+      const mainsAvailable = typeof s.mains_available === "boolean" ? s.mains_available : isMainsAvailable(signals);
+      const gridConnected = typeof s.grid_connected === "boolean" ? s.grid_connected : isGridConnected(signals);
+
+      const parsedSoc = Number(s.battery_soc);
+      const soc = s.battery_soc != null && Number.isFinite(parsedSoc) ? parsedSoc : null;
+      const socLabel = soc == null ? "UNAVAILABLE" : soc >= 70 ? "HIGH" : soc >= 35 ? "MEDIUM" : "LOW";
       const charging = !!s.battery_charging;
       const bstate = charging ? "charging" : (s.battery_power ?? 0) < -20 ? "discharging" : "idle";
+
+      const updatedMs = Date.parse(s.updated_at || "");
+      const sampleAgeS = Number.isFinite(updatedMs) ? Math.max(0, Math.floor((Date.now() - updatedMs) / 1000)) : null;
+      const stale = sampleAgeS == null || sampleAgeS > 180;
+
       return {
-        source: "live",
+        source: stale ? "stale" : "live",
+        data_available: true,
+        stale,
+        sample_age_s: sampleAgeS,
         battery_soc: soc,
         battery_soc_label: socLabel,
         bms_soc: s.bms_soc,
@@ -94,10 +106,14 @@ async function snapshot(env: any) {
         frequency: s.frequency,
         wapda_today_kwh: s.wapda_today_kwh,
         meter_total_kwh: s.meter_total_kwh,
-        wapda,
+        wapda: mainsAvailable,
+        mains_available: mainsAvailable,
+        grid_connected: gridConnected,
+        grid_voltage: s.grid_voltage ?? tuya?.grid_voltage ?? null,
         relay_state: relayReal,
         relay_closed: relayReal === 1,
         mode,
+        controller: "cloudflare-primary",
         charge_from_solar_kwh: s.charge_from_solar_kwh,
         charge_from_wapda_kwh: s.charge_from_wapda_kwh,
         total_charge_kwh: s.total_charge_kwh,
@@ -108,48 +124,72 @@ async function snapshot(env: any) {
         autoshift_charging: s.autoshift_charging,
         autoshift_until: s.autoshift_until,
         autoshift_trigger_voltage: s.autoshift_trigger_voltage,
+        autoshift_stop_reason: s.autoshift_stop_reason,
+        autoshift_min_on_until: s.autoshift_min_on_until ?? null,
+        autoshift_cooldown_until: s.autoshift_cooldown_until ?? null,
+        sample_at: s.sample_at,
         updated_at: s.updated_at,
       };
     }
   } catch {}
 
-  const soc = socAt(now);
-  const solar = solarAt(now);
-  const load = Math.round(620 + 380 * Math.abs(Math.sin(now.getTime() / 120000)));
-  const wapda = relay === 1;
-  const batteryVoltage = +(48 + ((soc - 45) / 45) * 6).toFixed(1);
-  const acVoltage = wapda ? +(228 + 4 * Math.sin(now.getTime() / 90000)).toFixed(1) : 0;
+  // No pipeline sample has ever been stored (or it failed to parse). Report
+  // honestly instead of inventing values.
+  const mainsAvailable = isMainsAvailable({
+    relayOn: relayReal === 1,
+    tuyaOnline: tuya?.online ?? null,
+    tuyaGridPower: tuya?.grid_power ?? null,
+    tuyaGridVoltage: tuya?.grid_voltage ?? null,
+  });
   return {
-    source: "demo",
-    battery_soc: soc,
-    battery_soc_label: soc >= 70 ? "HIGH" : soc >= 35 ? "MEDIUM" : "LOW",
-    battery_voltage: batteryVoltage,
-    solar_power: solar,
-    solar_peak_today: solar,
-    pv_today_kwh: 0,
-    load_power: load,
-    voltage: acVoltage,
-    current: acVoltage > 0 ? +(load / acVoltage).toFixed(1) : 0,
-    power: load,
-    energy_today: 0,
-    grid_power: 0,
-    frequency: wapda ? 50 : 0,
-    meter_total_kwh: 0,
-    wapda,
-    relay_state: relay,
-    relay_closed: relay === 1,
+    source: "unavailable",
+    data_available: false,
+    stale: true,
+    sample_age_s: null,
+    battery_soc: null,
+    battery_soc_label: "UNAVAILABLE",
+    bms_soc: null,
+    battery_voltage: null,
+    battery_current: null,
+    battery_power: null,
+    battery_charging: false,
+    battery_state: "unavailable",
+    solar_power: null,
+    solar_peak_today: null,
+    pv_today_kwh: null,
+    load_power: null,
+    voltage: null,
+    current: null,
+    power: null,
+    energy_today: null,
+    grid_power: null,
+    grid_voltage: tuya?.grid_voltage ?? null,
+    frequency: tuya?.frequency_hz ?? null,
+    meter_total_kwh: null,
+    wapda: mainsAvailable,
+    mains_available: mainsAvailable,
+    grid_connected: isGridConnected({
+      relayOn: relayReal === 1,
+      tuyaOnline: tuya?.online ?? null,
+      tuyaGridPower: tuya?.grid_power,
+      tuyaGridVoltage: tuya?.grid_voltage,
+    }),
+    relay_state: relayReal,
+    relay_closed: relayReal === 1,
     mode,
-    charge_from_solar_kwh: 0,
-    charge_from_wapda_kwh: 0,
-    total_charge_kwh: 0,
-    wapda_today_kwh: 0,
-    discharge_today_kwh: 0,
+    controller: "cloudflare-primary",
+    charge_from_solar_kwh: null,
+    charge_from_wapda_kwh: null,
+    total_charge_kwh: null,
+    wapda_today_kwh: null,
+    discharge_today_kwh: null,
+    breaker_online: tuya?.online ?? null,
     autoshift_phase: "idle",
     autoshift_active: false,
     autoshift_charging: false,
     autoshift_until: null,
     autoshift_trigger_voltage: null,
-    updated_at: now.toISOString(),
+    updated_at: null,
   };
 }
 
@@ -162,8 +202,6 @@ dashboard.get("/status", async (c) => {
 /* ---------- GET /api/history?hours=24 ---------- */
 dashboard.get("/history", async (c) => {
   const hours = Math.max(1, Math.min(48, parseInt(c.req.query("hours") || "24", 10) || 24));
-  const stepMin = hours <= 6 ? 15 : hours <= 12 ? 30 : 60;
-
   const since = Math.floor(Date.now() / 1000) - hours * 3600;
   try {
     const res: any = await (c.env as any).zeekay_power_db
@@ -171,18 +209,14 @@ dashboard.get("/history", async (c) => {
       .bind(since)
       .all();
     const rows = res?.results || [];
-    if (rows.length) {
-      const points = rows.map((r: any) => ({ t: new Date(r.ts * 1000).toISOString(), soc: Math.round(r.soc_blended) }));
-      return c.json({ success: true, hours, points });
-    }
-  } catch {}
-
-  const points: { t: string; soc: number }[] = [];
-  for (let t = hours * 60; t >= 0; t -= stepMin) {
-    const d = new Date(Date.now() - t * 60000);
-    points.push({ t: d.toISOString(), soc: socAt(d) });
+    const points = rows
+      .filter((r: any) => r.ts != null && r.soc_blended != null && Number.isFinite(Number(r.ts)) && Number.isFinite(Number(r.soc_blended)))
+      .map((r: any) => ({ t: new Date(Number(r.ts) * 1000).toISOString(), soc: Math.round(Number(r.soc_blended)) }));
+    return c.json({ success: true, hours, points });
+  } catch (error: any) {
+    console.error("history query failed:", error?.message);
+    return c.json({ success: false, message: "History is temporarily unavailable" }, 503);
   }
-  return c.json({ success: true, hours, points });
 });
 
 /* ---------- GET /api/events?limit=8 ---------- */
@@ -201,61 +235,92 @@ dashboard.get("/events", async (c) => {
 
 /* ---------- POST /api/relay { state: 0|1 } ---------- */
 dashboard.post("/relay", requireFullAccess, async (c) => {
-  let body: any = {};
+  let body: any;
   try {
     body = await c.req.json();
   } catch {
-    /* ignore */
+    return c.json({ success: false, message: "A JSON body is required" }, 400);
   }
 
-  const next = body && (body.state === 1 || body.state === true || body.state === "1") ? 1 : 0;
-
-  try {
-    await setTuyaRelay(c.env as any, next === 1);
-  } catch (e: any) {
-    return c.json({ success: false, error: "tuya command failed: " + (e?.message || e) }, 502);
+  const validOn = body?.state === 1 || body?.state === true || body?.state === "1";
+  const validOff = body?.state === 0 || body?.state === false || body?.state === "0";
+  if (!validOn && !validOff) {
+    return c.json({ success: false, message: "state must be 0, 1, false, or true" }, 400);
   }
-  await setState(c.env as any, "relay_state", String(next));
-  try {
-    const ts = await fetchTuyaStatus(c.env as any);
-    await setState(c.env as any, "tuya_status", JSON.stringify(ts));
-  } catch { /* read-back best-effort */ }
+  const next = validOn ? 1 : 0;
 
-  // If auto-shift was mid-cycle (waiting for grid, or actively charging) and
-  // the user just manually turned WAPDA off, clear the state so /api/status
-  // stops reporting a stale phase — manual override takes precedence.
-  if (next === 0) {
-    try {
-      const raw = await getState(c.env as any, "autoshift_state", "");
-      if (raw) {
-        const as = JSON.parse(raw);
-        const wasMidCycle = as && (as.phase ? as.phase !== "idle" : as.active);
-        if (wasMidCycle) {
-          await setState(c.env as any, "autoshift_state", JSON.stringify({ phase: "idle", trigger_ts: null, trigger_voltage: null, charge_start_ts: null, until_ts: null }));
-          await logEvent(c.env as any, "autoshift", "Auto-shift cycle ended", "Manually overridden from dashboard before it finished on its own");
+  // Take the same lock the cron tick uses, so a manual switch can never race a
+  // running auto-shift decision.
+  const nowEpoch = Math.floor(Date.now() / 1000);
+  const lockExpiresAt = await acquireTickLock(c.env as any, nowEpoch);
+  if (lockExpiresAt == null) {
+    return c.json({ success: false, message: "The controller is busy; refresh and try again" }, 409);
+  }
+
+  try {
+    const confirmed = await setTuyaRelayAndConfirm(c.env as any, next === 1);
+    await setState(c.env as any, "relay_state", confirmed.relay_on ? "1" : "0");
+    await setState(c.env as any, "relay_last_known", confirmed.relay_on ? "1" : "0");
+    await setState(c.env as any, "tuya_status", JSON.stringify(confirmed));
+    await setState(c.env as any, "relay_command_pending", "");
+
+    // Manual override wins: if auto-shift was mid-cycle and the user just
+    // turned WAPDA off, drop the cycle so /api/status stops reporting a phase
+    // that is no longer running.
+    if (next === 0) {
+      try {
+        const raw = await getState(c.env as any, "autoshift_state", "");
+        const state = normalizeAutoshiftState(raw ? JSON.parse(raw) : null);
+        if (state.phase !== "idle") {
+          // Stamp last_end_ts so the cooldown applies. Without it the very next
+          // cron tick would see a low battery and immediately close the relay
+          // again — turning a deliberate manual OFF into a 60-second flap.
+          await setState(
+            c.env as any,
+            "autoshift_state",
+            JSON.stringify({ ...normalizeAutoshiftState(null), last_end_ts: Math.floor(Date.now() / 1000) })
+          );
+          await logEvent(c.env as any, "autoshift", "Auto-shift cycle ended", "Manually overridden from dashboard after relay OFF was confirmed");
         }
+      } catch (error: any) {
+        console.error("failed to clear auto-shift after manual override:", error?.message);
       }
-    } catch { /* best-effort */ }
+    }
+
+    await logEvent(
+      c.env as any,
+      "relay",
+      `WAPDA relay ${next ? "closed (ON)" : "opened (OFF)"}`,
+      "Manual override confirmed by Tuya read-back"
+    );
+
+    return c.json({ success: true, relay_state: next, confirmed: true });
+  } catch (e: any) {
+    console.error("manual relay command failed:", e?.message);
+    return c.json({ success: false, message: "Relay command was not confirmed; the displayed state will be refreshed" }, 502);
+  } finally {
+    await releaseTickLock(c.env as any, lockExpiresAt).catch(() => {});
   }
-
-  await logEvent(
-    c.env as any,
-    "relay",
-    `WAPDA relay ${next ? "closed (ON)" : "opened (OFF)"}`,
-    "Manual override from dashboard"
-  );
-
-  return c.json({ success: true, relay_state: next });
 });
 
 /* ---------- POST /api/poll ---------- */
 dashboard.post("/poll", requireFullAccess, async (c) => {
-  try { await runSocTick(c.env as any); } catch (e: any) { console.error("poll tick:", e?.message); }
+  try {
+    await runSocTick(c.env as any);
+  } catch (e: any) {
+    console.error("manual poll failed:", e?.message);
+    const busy = e?.message === "SOC tick already running";
+    return c.json(
+      { success: false, message: busy ? "A poll is already running" : "Could not refresh inverter data" },
+      busy ? 409 : 502
+    );
+  }
+
   await logEvent(
     c.env as any,
     "system",
     "Manual poll requested",
-    "Fetched latest device + inverter data"
+    "Latest device and inverter data fetched successfully"
   );
 
   const status = await snapshot(c.env as any);
@@ -263,42 +328,62 @@ dashboard.post("/poll", requireFullAccess, async (c) => {
 });
 
 /* ---------- Auto-shift-to-WAPDA settings (voltage-triggered) ---------- */
-const AUTOSHIFT_DEFAULT = { enabled: false, threshold_v: 45.8, duration_min: 60, pv_stop_w: 200 };
-
 dashboard.get("/autoshift", async (c) => {
   const env = c.env as any;
-  let cfg = { ...AUTOSHIFT_DEFAULT };
-  try { const raw = await getState(env, "autoshift_cfg", ""); if (raw) cfg = { ...cfg, ...JSON.parse(raw) }; } catch {}
-  let state: any = { phase: "idle", trigger_ts: null, trigger_voltage: null, charge_start_ts: null, until_ts: null };
+  let cfg: AutoshiftConfig = { ...AUTOSHIFT_DEFAULT };
+  try {
+    const raw = await getState(env, "autoshift_cfg", "");
+    cfg = normalizeAutoshiftConfig(raw ? JSON.parse(raw) : cfg);
+  } catch {}
+
+  let state = normalizeAutoshiftState(null);
   try {
     const raw = await getState(env, "autoshift_state", "");
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      state = parsed.phase ? { ...state, ...parsed } : { ...state, phase: parsed.active ? "charging" : "idle", trigger_voltage: parsed.trigger_voltage ?? null, until_ts: parsed.until_ts ?? null };
-    }
+    state = normalizeAutoshiftState(raw ? JSON.parse(raw) : null);
   } catch {}
+
   return c.json({
     success: true,
     enabled: cfg.enabled,
     threshold_v: cfg.threshold_v,
     duration_min: cfg.duration_min,
     pv_stop_w: cfg.pv_stop_w,
-    window: "18:00\u201306:00 (Pakistan time) \u2014 fixed, not adjustable here",
+    min_on_min: cfg.min_on_min,
+    cooldown_min: cfg.cooldown_min,
+    window: "18:00–06:00 (Pakistan time) — fixed, not adjustable here",
     phase: state.phase,
     active: state.phase !== "idle",
     charging: state.phase === "charging",
+    stopping: state.phase === "stopping",
+    stop_reason: state.stop_reason ?? null,
     trigger_voltage: state.trigger_voltage,
     until: state.until_ts ? new Date(state.until_ts * 1000).toISOString() : null,
+    min_on_until: state.relay_closed_ts
+      ? new Date((state.relay_closed_ts + Math.min(cfg.min_on_min, cfg.duration_min) * 60) * 1000).toISOString()
+      : null,
+    cooldown_until: state.last_end_ts
+      ? new Date((state.last_end_ts + cfg.cooldown_min * 60) * 1000).toISOString()
+      : null,
   });
 });
 
 dashboard.post("/autoshift", requireFullAccess, async (c) => {
   const env = c.env as any;
-  let body: any = {};
-  try { body = await c.req.json(); } catch { /* ignore */ }
+  let body: any;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ success: false, message: "A JSON body is required" }, 400);
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return c.json({ success: false, message: "Invalid settings body" }, 400);
+  }
 
-  let cfg = { ...AUTOSHIFT_DEFAULT };
-  try { const raw = await getState(env, "autoshift_cfg", ""); if (raw) cfg = { ...cfg, ...JSON.parse(raw) }; } catch {}
+  let cfg: AutoshiftConfig = { ...AUTOSHIFT_DEFAULT };
+  try {
+    const raw = await getState(env, "autoshift_cfg", "");
+    cfg = normalizeAutoshiftConfig(raw ? JSON.parse(raw) : cfg);
+  } catch {}
 
   if (typeof body.enabled === "boolean") cfg.enabled = body.enabled;
   if (body.threshold_v != null) {
@@ -316,12 +401,58 @@ dashboard.post("/autoshift", requireFullAccess, async (c) => {
     if (!Number.isFinite(w) || w < 50 || w > 2000) return c.json({ success: false, error: "pv_stop_w must be between 50 and 2000 W" }, 400);
     cfg.pv_stop_w = Math.round(w);
   }
+  if (body.min_on_min != null) {
+    const m = Number(body.min_on_min);
+    if (!Number.isInteger(m) || m < 0 || m > 120) return c.json({ success: false, error: "min_on_min must be an integer between 0 and 120" }, 400);
+    cfg.min_on_min = m;
+  }
+  if (body.cooldown_min != null) {
+    const m = Number(body.cooldown_min);
+    if (!Number.isInteger(m) || m < 0 || m > 240) return c.json({ success: false, error: "cooldown_min must be an integer between 0 and 240" }, 400);
+    cfg.cooldown_min = m;
+  }
 
   await setState(env, "autoshift_cfg", JSON.stringify(cfg));
-  await logEvent(env, "autoshift", `Auto-shift settings updated`,
-    `${cfg.enabled ? "Enabled" : "Disabled"} \u00b7 trigger \u2264 ${cfg.threshold_v} V (18:00\u201306:00 only) \u00b7 hold up to ${cfg.duration_min} min \u00b7 stop early at PV \u2265 ${cfg.pv_stop_w} W`);
 
-  return c.json({ success: true, ...cfg });
+  // Turning the feature off must actually open the relay, not just stop future
+  // cycles. If the confirmation can't be obtained right now the cycle is left
+  // in "stopping" so the next tick retries.
+  let cancellationPending = false;
+  if (!cfg.enabled) {
+    try {
+      const raw = await getState(env, "autoshift_state", "");
+      const state = normalizeAutoshiftState(raw ? JSON.parse(raw) : null);
+      if (state.phase !== "idle") {
+        cancellationPending = true;
+        await setState(env, "autoshift_state", JSON.stringify({ ...state, phase: "stopping", until_ts: null, stop_reason: "disabled" }));
+        const nowEpoch = Math.floor(Date.now() / 1000);
+        const lockExpiresAt = await acquireTickLock(env, nowEpoch);
+        if (lockExpiresAt != null) {
+          try {
+            const confirmed = await setTuyaRelayAndConfirm(env, false);
+            await setState(env, "relay_state", "0");
+            await setState(env, "relay_last_known", "0");
+            await setState(env, "tuya_status", JSON.stringify(confirmed));
+            await setState(env, "relay_command_pending", "");
+            await setState(env, "autoshift_state", JSON.stringify(normalizeAutoshiftState(null)));
+            cancellationPending = false;
+          } catch (error: any) {
+            console.error("auto-shift disable OFF confirmation failed:", error?.message);
+          } finally {
+            await releaseTickLock(env, lockExpiresAt).catch(() => {});
+          }
+        }
+      }
+    } catch (error: any) {
+      console.error("failed to cancel auto-shift:", error?.message);
+      cancellationPending = true;
+    }
+  }
+
+  await logEvent(env, "autoshift", `Auto-shift settings updated`,
+    `${cfg.enabled ? "Enabled" : "Disabled"} · trigger ≤ ${cfg.threshold_v} V (18:00–06:00 only) · hold up to ${cfg.duration_min} min · stop early at PV ≥ ${cfg.pv_stop_w} W · relay protection: ${cfg.min_on_min} min minimum ON, ${cfg.cooldown_min} min cooldown`);
+
+  return c.json({ success: true, ...cfg, cancellation_pending: cancellationPending });
 });
 
 /* ---------- GET /api/history/cycles (WAPDA billing-cycle history, resets on the 22nd) ---------- */
@@ -363,7 +494,8 @@ dashboard.get("/history/cycles", async (c) => {
       .sort((a: any, b: any) => (a.cycle_start < b.cycle_start ? 1 : -1));
     return c.json({ success: true, cycles: list });
   } catch (e: any) {
-    return c.json({ success: true, cycles: [], error: e?.message });
+    console.error("billing-cycle query failed:", e?.message);
+    return c.json({ success: false, message: "Billing history is temporarily unavailable" }, 503);
   }
 });
 function r2c(x: number) { return Math.round(x * 100) / 100; }

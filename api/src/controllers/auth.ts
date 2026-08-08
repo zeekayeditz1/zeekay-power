@@ -2,24 +2,24 @@ import { Context } from "hono";
 import { z } from "zod";
 
 import {
-  createUser,
-  emailExists,
+  createFirstUser,
   getUserByEmail,
   countUsers,
 } from "../services/userService";
 
+import { consumeLoginAttempt } from "../services/dashboardStore";
 import { verifyPassword } from "../utils/hash";
 import { createToken } from "../utils/jwt";
 
 const registerSchema = z.object({
   name: z.string().min(2).max(100),
   email: z.string().email(),
-  password: z.string().min(6).max(100),
+  password: z.string().min(8).max(100),
 });
 
 const loginSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(6),
+  password: z.string().min(6).max(100),
 });
 
 export async function register(c: Context) {
@@ -33,33 +33,11 @@ export async function register(c: Context) {
     // Bootstrap-only: registration is open only until the first account
     // exists. This keeps the private control dashboard closed to public
     // sign-ups once it has been set up.
-    const existingUsers = await countUsers(env);
-    if (existingUsers > 0) {
-      return c.json(
-        {
-          success: false,
-          message: "Registration is closed",
-        },
-        403
-      );
+    if ((await countUsers(env)) > 0) {
+      return c.json({ success: false, message: "Registration is closed" }, 403);
     }
 
-    const exists = await emailExists(
-      env,
-      data.email
-    );
-
-    if (exists) {
-      return c.json(
-        {
-          success: false,
-          message: "Email already exists",
-        },
-        409
-      );
-    }
-
-    const userId = await createUser(
+    const userId = await createFirstUser(
       env,
       {
         name: data.name,
@@ -67,6 +45,11 @@ export async function register(c: Context) {
         password: data.password,
       }
     );
+
+    // Lost the race against a concurrent bootstrap request.
+    if (!userId) {
+      return c.json({ success: false, message: "Registration is closed" }, 403);
+    }
 
     const token = await createToken(
       {
@@ -88,10 +71,14 @@ export async function register(c: Context) {
       },
     });
   } catch (error: any) {
+    if (error instanceof z.ZodError || error instanceof SyntaxError) {
+      return c.json({ success: false, message: "Invalid registration details" }, 400);
+    }
+    console.error("registration failed:", error?.message);
     return c.json(
       {
         success: false,
-        error: error.message,
+        message: "Registration failed",
       },
       400
     );
@@ -105,6 +92,14 @@ export async function login(c: Context) {
     const data = loginSchema.parse(body);
 
     const env = c.env as any;
+
+    // Throttle credential stuffing before touching the password hash.
+    const clientAddress = c.req.header("CF-Connecting-IP") || "unknown-client";
+    const limit = await consumeLoginAttempt(env, clientAddress, Math.floor(Date.now() / 1000));
+    if (!limit.allowed) {
+      c.header("Retry-After", String(limit.retryAfter));
+      return c.json({ success: false, message: "Too many login attempts; try again later" }, 429);
+    }
 
     const user = await getUserByEmail(
       env,
@@ -157,10 +152,14 @@ export async function login(c: Context) {
       },
     });
   } catch (error: any) {
+    if (error instanceof z.ZodError || error instanceof SyntaxError) {
+      return c.json({ success: false, message: "Invalid login details" }, 400);
+    }
+    console.error("login failed:", error?.message);
     return c.json(
       {
         success: false,
-        error: error.message,
+        message: "Login failed",
       },
       400
     );

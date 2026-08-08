@@ -19,9 +19,18 @@ const BASES: Record<string, string> = {
 };
 function baseUrl(env: TuyaEnv) {
   const r = (env.TUYA_REGION || "eu").trim();
-  return r.startsWith("http") ? r.replace(/\/+$/, "") : (BASES[r] || BASES.eu);
+  if (r.startsWith("http")) {
+    const normalized = r.replace(/\/+$/, "");
+    // Only ever sign and send credentials to a known Tuya datacentre — a typo
+    // or tampered binding must fail loudly, not leak the signed request.
+    if (Object.values(BASES).includes(normalized)) return normalized;
+    throw new Error("Unsupported Tuya API region URL");
+  }
+  if (!BASES[r]) throw new Error(`Unsupported Tuya region: ${r}`);
+  return BASES[r];
 }
 
+const REQUEST_TIMEOUT_MS = 12000;
 const enc = new TextEncoder();
 async function sha256Hex(s: string) {
   const b = await crypto.subtle.digest("SHA-256", enc.encode(s));
@@ -40,14 +49,32 @@ async function signedFetch(env: TuyaEnv, token: string, method: string, path: st
   const sign = await hmacHex(env.TUYA_CLIENT_SECRET, signStr);
   const headers: Record<string, string> = { client_id: env.TUYA_CLIENT_ID, sign, t, sign_method: "HMAC-SHA256", "Content-Type": "application/json" };
   if (token) headers["access_token"] = token;
-  const res = await fetch(baseUrl(env) + path, { method, headers, body: body || undefined });
-  return res.json() as Promise<any>;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(baseUrl(env) + path, { method, headers, body: body || undefined, signal: controller.signal });
+    if (!res.ok) throw new Error(`Tuya HTTP ${res.status}`);
+    try {
+      return (await res.json()) as any;
+    } catch {
+      throw new Error("Tuya returned invalid JSON");
+    }
+  } catch (error: any) {
+    if (error?.name === "AbortError") throw new Error("Tuya request timed out");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 async function getToken(env: TuyaEnv): Promise<string> {
   try { const raw = await getState(env as any, "tuya_token", ""); if (raw) { const c = JSON.parse(raw); if (c && c.exp > Date.now()) return c.token; } } catch {}
   const d = await signedFetch(env, "", "GET", "/v1.0/token?grant_type=1");
   if (!d.success || !d.result?.access_token) throw new Error(`tuya token: code=${d.code} ${d.msg}`);
-  await setState(env as any, "tuya_token", JSON.stringify({ token: d.result.access_token, exp: Date.now() + (d.result.expire_time - 120) * 1000 }));
+  // Guard against a missing/garbage expire_time producing a NaN expiry, which
+  // would make the cached token look permanently valid.
+  const expiresIn = Number(d.result.expire_time);
+  const safeExpiresIn = Number.isFinite(expiresIn) ? Math.max(60, expiresIn - 120) : 3600;
+  await setState(env as any, "tuya_token", JSON.stringify({ token: d.result.access_token, exp: Date.now() + safeExpiresIn * 1000 }));
   return d.result.access_token;
 }
 /** Signed call that transparently refreshes an expired/invalid token and retries once.
@@ -82,13 +109,28 @@ export interface TuyaStatus {
 export async function fetchTuyaStatus(env: TuyaEnv): Promise<TuyaStatus> {
   const d = await callWithTokenRetry(env, "GET", `/v1.0/devices/${env.TUYA_DEVICE_ID}/status`);
   if (!d.success) throw new Error(`tuya status: code=${d.code} ${d.msg}`);
+  if (!Array.isArray(d.result)) throw new Error("tuya status returned an invalid result");
   const m: Record<string, any> = {}; for (const x of d.result) m[x.code] = x.value;
   const ph = decodePhase(m.phase_a);
-  const relayStatus = m.relay_status ?? (m.switch ? "power_on" : "power_off");
+
+  /* `switch` is the live contact state and is what must drive every decision.
+     `relay_status` on this breaker is the POWER-ON BEHAVIOUR setting (what the
+     device does when mains returns), not the current state — verified live:
+     it reads "power_off" while switch=true and 4.5 A is flowing through the
+     breaker. Treating relay_status as the state (the old `relay_status ===
+     "power_on" || switch === true`) would report the relay permanently closed
+     the moment that setting is changed to "on" in the Tuya app. Fall back to
+     relay_status only when no switch DP is present at all. */
+  const switchDp =
+    typeof m.switch === "boolean" ? m.switch :
+    typeof m.switch_1 === "boolean" ? m.switch_1 :
+    null;
+  const relayOn = switchDp !== null ? switchDp : m.relay_status === "power_on";
+
   return {
     online: (m.online_state ?? "online") === "online",
-    relay_on: relayStatus === "power_on" || m.switch === true,
-    relay_status: String(relayStatus),
+    relay_on: relayOn,
+    relay_status: String(m.relay_status ?? (relayOn ? "power_on" : "power_off")),
     grid_voltage: ph ? ph.voltage : null, grid_current: ph ? ph.current : null, grid_power: ph ? ph.power : null,
     frequency_hz: m.supply_frequency != null ? m.supply_frequency / 10 : null,
     energy_total_kwh: m.forward_energy_total != null ? m.forward_energy_total / 100 : null,
@@ -102,5 +144,19 @@ export async function setTuyaRelay(env: TuyaEnv, on: boolean): Promise<boolean> 
   if (!d.success) throw new Error(`tuya command: code=${d.code} ${d.msg}`);
   return d.result === true || d.success === true;
 }
+/** Send the command, then read the breaker back until it actually reports the
+ *  requested state. "Tuya accepted the command" is not the same as "the relay
+ *  moved" — the device can be offline with the cloud still returning success. */
+export async function setTuyaRelayAndConfirm(env: TuyaEnv, on: boolean): Promise<TuyaStatus> {
+  await setTuyaRelay(env, on);
+  let last: TuyaStatus | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 500));
+    last = await fetchTuyaStatus(env);
+    if (last.relay_on === on) return last;
+  }
+  throw new Error(`Tuya accepted the command but the relay did not confirm ${on ? "ON" : "OFF"}`);
+}
+
 export function tuyaConfigured(env: TuyaEnv) { return !!(env.TUYA_CLIENT_ID && env.TUYA_CLIENT_SECRET && env.TUYA_DEVICE_ID); }
-export default { fetchTuyaStatus, setTuyaRelay, tuyaConfigured };
+export default { fetchTuyaStatus, setTuyaRelay, setTuyaRelayAndConfirm, tuyaConfigured };

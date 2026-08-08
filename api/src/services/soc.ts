@@ -22,6 +22,16 @@ export const DEFAULTS = {
   cap_bounds:[80,160] as [number,number],
 };
 const clamp=(x:number,lo:number,hi:number)=>Math.max(lo,Math.min(hi,x));
+
+/*
+| Two consecutive samples are only treated as a continuous stretch of time if
+| they are at most this far apart. The cron ticks every 60s, so 180s tolerates
+| a couple of missed ticks. Anything longer is a real gap (worker downtime, a
+| deploy, a SEMS outage) and contributes ZERO measured time: it must not be
+| integrated into the coulomb count, and it must not count toward the 30-minute
+| "battery has been at rest" condition that triggers a voltage anchor.
+*/
+const MAX_CONTIGUOUS_SAMPLE_GAP_S = 180;
 export interface SocState {
   soc?:number; c_usable_ah?:number; ri_ohm?:number; eta_charge?:number;
   last_ts?:number|null; rest_run_s?:number; last_anchor_ts?:number;
@@ -33,41 +43,42 @@ export interface Sample { v:number; p_chg:number; ts:number; bms_soc?:number|nul
 export function step(state: SocState, sample: Sample, cfg = DEFAULTS): SocState {
   const s: SocState = { c_usable_ah:cfg.c_usable_ah, ri_ohm:cfg.ri_ohm, eta_charge:cfg.eta_charge, ...state };
   const { v, p_chg, ts } = sample;
+  if (!Number.isFinite(v) || v <= 0 || !Number.isFinite(p_chg) || !Number.isFinite(ts)) {
+    throw new Error("invalid SOC sample");
+  }
   if (s.last_ts == null) {
     const i0 = p_chg / v; const v_rest0 = v - i0*(s.ri_ohm as number);
     s.soc = socFromRestingVoltage(v_rest0);
     s.last_ts = ts; s.rest_run_s = 0; s.last_anchor_ts = ts;
     s.ah_since_anchor = 0; s.soc_at_anchor = s.soc; s._prev = { v, i:i0 };
-    return { ...s, soc_cc:s.soc, soc_v:s.soc, anchored:true, blended:s.soc };
+    // The very first sample seeds SOC from voltage under whatever load happens
+    // to be running — that is a starting guess, not a true rest anchor, so it
+    // must not be reported as anchored.
+    return { ...s, soc_cc:s.soc, soc_v:s.soc, anchored:false, blended:s.soc };
   }
-  // Cap the raw elapsed time BEFORE it's used for energy integration or the
-  // resting-duration counter. Without this, a connectivity gap (worker
-  // downtime, a deploy, a SEMS outage) would let a single tick after the gap
-  // inject a huge coulomb-counting jump, or instantly satisfy the 30-minute
-  // "at rest" condition from one sample and force a false anchor.
-  const MAX_STEP_S = 600; // 10 minutes — matches the cap used elsewhere in the pipeline
   const rawDt = ts - (s.last_ts as number);
-  const dtCapped = Math.max(0, Math.min(rawDt, MAX_STEP_S));
-  const dt_h = dtCapped / 3600;
+  const contiguous = rawDt >= 0 && rawDt <= MAX_CONTIGUOUS_SAMPLE_GAP_S;
+  const dtMeasured = contiguous ? rawDt : 0;
+  const dt_h = dtMeasured / 3600;
   const i_signed = p_chg / v;
   let dAh = i_signed*dt_h; if (dAh>0) dAh *= (s.eta_charge as number);
   const soc_cc = clamp((s.soc as number) + (dAh/(s.c_usable_ah as number))*100, 0, 100);
   s.ah_since_anchor = (s.ah_since_anchor||0) + dAh;
   const v_rest = v - i_signed*(s.ri_ohm as number);
   const soc_v = socFromRestingVoltage(v_rest);
-  if (s._prev){ const dI=i_signed-s._prev.i, dV=v-s._prev.v;
-    if (Math.abs(dI)>3 && dtCapped<900){ const ri=-dV/dI; if (ri>0) s.ri_ohm=clamp(0.9*(s.ri_ohm as number)+0.1*ri,cfg.ri_bounds[0],cfg.ri_bounds[1]); } }
+  if (s._prev && contiguous && rawDt>0){ const dI=i_signed-s._prev.i, dV=v-s._prev.v;
+    if (Math.abs(dI)>3){ const ri=-dV/dI; if (ri>0) s.ri_ohm=clamp(0.9*(s.ri_ohm as number)+0.1*ri,cfg.ri_bounds[0],cfg.ri_bounds[1]); } }
   s._prev = { v, i:i_signed };
   const chargerHolding = i_signed>0.3 && v>50.4;
   const nearRest = Math.abs(i_signed)<cfg.rest_current_a && !chargerHolding;
-  s.rest_run_s = nearRest ? (s.rest_run_s||0)+dtCapped : 0;
+  s.rest_run_s = (nearRest && contiguous) ? (s.rest_run_s||0)+dtMeasured : 0;
   let anchored=false;
   if ((s.rest_run_s as number)>=cfg.rest_min_s && v_rest<=50.8 && v_rest>=42.0){
     const dSoc = soc_v-(s.soc_at_anchor ?? soc_v);
     if (Math.abs(dSoc)>=8 && Math.abs(s.ah_since_anchor as number)>3){
       const cap=Math.abs(s.ah_since_anchor as number)/(Math.abs(dSoc)/100);
       s.c_usable_ah=clamp(0.8*(s.c_usable_ah as number)+0.2*cap,cfg.cap_bounds[0],cfg.cap_bounds[1]); }
-    s.soc=soc_v; s.soc_at_anchor=soc_v; s.ah_since_anchor=0; s.last_anchor_ts=ts; anchored=true;
+    s.soc=soc_v; s.soc_at_anchor=soc_v; s.ah_since_anchor=0; s.last_anchor_ts=ts; s.rest_run_s=0; anchored=true;
   } else {
     s.soc = clamp(soc_cc + cfg.k_blend*(soc_v-soc_cc),0,100);
   }
