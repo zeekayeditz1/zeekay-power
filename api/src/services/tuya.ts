@@ -112,11 +112,25 @@ export async function fetchTuyaStatus(env: TuyaEnv): Promise<TuyaStatus> {
   if (!Array.isArray(d.result)) throw new Error("tuya status returned an invalid result");
   const m: Record<string, any> = {}; for (const x of d.result) m[x.code] = x.value;
   const ph = decodePhase(m.phase_a);
-  const relayStatus = m.relay_status ?? (m.switch ? "power_on" : "power_off");
+
+  /* `switch` is the live contact state and is what must drive every decision.
+     `relay_status` on this breaker is the POWER-ON BEHAVIOUR setting (what the
+     device does when mains returns), not the current state — verified live:
+     it reads "power_off" while switch=true and 4.5 A is flowing through the
+     breaker. Treating relay_status as the state (the old `relay_status ===
+     "power_on" || switch === true`) would report the relay permanently closed
+     the moment that setting is changed to "on" in the Tuya app. Fall back to
+     relay_status only when no switch DP is present at all. */
+  const switchDp =
+    typeof m.switch === "boolean" ? m.switch :
+    typeof m.switch_1 === "boolean" ? m.switch_1 :
+    null;
+  const relayOn = switchDp !== null ? switchDp : m.relay_status === "power_on";
+
   return {
     online: (m.online_state ?? "online") === "online",
-    relay_on: relayStatus === "power_on" || m.switch === true,
-    relay_status: String(relayStatus),
+    relay_on: relayOn,
+    relay_status: String(m.relay_status ?? (relayOn ? "power_on" : "power_off")),
     grid_voltage: ph ? ph.voltage : null, grid_current: ph ? ph.current : null, grid_power: ph ? ph.power : null,
     frequency_hz: m.supply_frequency != null ? m.supply_frequency / 10 : null,
     energy_total_kwh: m.forward_energy_total != null ? m.forward_energy_total / 100 : null,
