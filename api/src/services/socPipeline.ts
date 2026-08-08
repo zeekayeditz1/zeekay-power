@@ -217,7 +217,6 @@ export async function runSocTick(env: any) {
       };
       const plan = planAutoshift(cfg, asState, planInput);
       asState = plan.state;
-      const requestedStopReason = plan.state.stop_reason ?? previousState.stop_reason ?? null;
       const transitions: AutoshiftTransition[] = plan.transition ? [plan.transition] : [];
       let commandError: string | null = null;
 
@@ -260,6 +259,11 @@ export async function runSocTick(env: any) {
         }
       }
 
+      // Resolve the reason AFTER the confirmed re-plan — reading it too early
+      // used to mislabel every window/PV stop as "Auto-shift was disabled".
+      const requestedStopReason =
+        asState.stop_reason ?? plan.state.stop_reason ?? previousState.stop_reason ?? null;
+
       if (transitions.includes("started_waiting")) {
         await logEvent(env, "autoshift", "Auto-shift: watching for WAPDA",
           `Battery at ${snap.v.toFixed(1)} V (≤ ${cfg.threshold_v} V, ${localHour}:00 local) — relay ON requested; true grid-side telemetry is required before the ${cfg.duration_min}-min timer starts`);
@@ -270,17 +274,22 @@ export async function runSocTick(env: any) {
       }
       if (transitions.includes("grid_lost")) {
         await logEvent(env, "autoshift", "Auto-shift: WAPDA lost again",
-          "Grid-side telemetry disappeared mid-charge — the timer is paused and the controller is waiting for confirmed mains");
+          "Grid-side telemetry disappeared mid-charge — the timer is paused and the breaker is left as-is while the controller waits for confirmed mains");
+      }
+      if (transitions.includes("external_override")) {
+        await logEvent(env, "autoshift", "Auto-shift: cycle ended — breaker opened elsewhere",
+          `The WAPDA breaker was closed by this controller and then opened by something else (Tuya app schedule, a manual switch, or mains cycling a breaker whose power-on state is OFF). The cycle has ended rather than closing the relay again; a new one can start after the ${cfg.cooldown_min}-min cooldown.`);
       }
       if (transitions.includes("stop_requested")) {
         const reason =
           requestedStopReason === "pv_recovered" ? `PV reached ${Math.round(pvNow)} W (≥ ${cfg.pv_stop_w} W)`
           : requestedStopReason === "duration_complete" ? `${cfg.duration_min} min of confirmed WAPDA charging finished`
           : requestedStopReason === "window_ended" ? "The 18:00–06:00 automation window ended"
-          : "Auto-shift was disabled";
+          : requestedStopReason === "external_override" ? "The breaker was opened outside this controller"
+          : "Auto-shift was switched off";
         await logEvent(env, "autoshift", "Auto-shift: turning WAPDA OFF", `${reason} — waiting for relay read-back confirmation`);
       }
-      if (transitions.includes("stopped")) {
+      if (transitions.includes("stopped") && !transitions.includes("external_override")) {
         await logEvent(env, "autoshift", "Auto-shift: WAPDA confirmed OFF",
           `Relay read-back is open; cycle ended (${requestedStopReason || "cancelled"})`);
       }
@@ -339,6 +348,13 @@ export async function runSocTick(env: any) {
       autoshift_until: asState.until_ts ? new Date(asState.until_ts * 1000).toISOString() : null,
       autoshift_trigger_voltage: asState.trigger_voltage ?? null,
       autoshift_stop_reason: asState.stop_reason ?? null,
+      // Relay-protection visibility: when the breaker may next be switched.
+      autoshift_min_on_until: asState.relay_closed_ts
+        ? new Date((asState.relay_closed_ts + Math.min(cfg.min_on_min, cfg.duration_min) * 60) * 1000).toISOString()
+        : null,
+      autoshift_cooldown_until: asState.last_end_ts
+        ? new Date((asState.last_end_ts + cfg.cooldown_min * 60) * 1000).toISOString()
+        : null,
       controller: "cloudflare-primary",
       sample_ts: snap.ts,
       sample_at: new Date(snap.ts * 1000).toISOString(),

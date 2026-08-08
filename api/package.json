@@ -6,8 +6,10 @@
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
     "start": "wrangler dev",
-    "test": "vitest",
-    "cf-typegen": "wrangler types"
+    "test": "vitest run --config vitest.unit.config.mts",
+    "cf-typegen": "wrangler types",
+    "test:unit": "vitest run --config vitest.unit.config.mts",
+    "test:worker": "vitest run"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

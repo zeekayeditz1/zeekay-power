@@ -125,6 +125,8 @@ async function snapshot(env: any) {
         autoshift_until: s.autoshift_until,
         autoshift_trigger_voltage: s.autoshift_trigger_voltage,
         autoshift_stop_reason: s.autoshift_stop_reason,
+        autoshift_min_on_until: s.autoshift_min_on_until ?? null,
+        autoshift_cooldown_until: s.autoshift_cooldown_until ?? null,
         sample_at: s.sample_at,
         updated_at: s.updated_at,
       };
@@ -270,7 +272,14 @@ dashboard.post("/relay", requireFullAccess, async (c) => {
         const raw = await getState(c.env as any, "autoshift_state", "");
         const state = normalizeAutoshiftState(raw ? JSON.parse(raw) : null);
         if (state.phase !== "idle") {
-          await setState(c.env as any, "autoshift_state", JSON.stringify(normalizeAutoshiftState(null)));
+          // Stamp last_end_ts so the cooldown applies. Without it the very next
+          // cron tick would see a low battery and immediately close the relay
+          // again — turning a deliberate manual OFF into a 60-second flap.
+          await setState(
+            c.env as any,
+            "autoshift_state",
+            JSON.stringify({ ...normalizeAutoshiftState(null), last_end_ts: Math.floor(Date.now() / 1000) })
+          );
           await logEvent(c.env as any, "autoshift", "Auto-shift cycle ended", "Manually overridden from dashboard after relay OFF was confirmed");
         }
       } catch (error: any) {
@@ -339,6 +348,8 @@ dashboard.get("/autoshift", async (c) => {
     threshold_v: cfg.threshold_v,
     duration_min: cfg.duration_min,
     pv_stop_w: cfg.pv_stop_w,
+    min_on_min: cfg.min_on_min,
+    cooldown_min: cfg.cooldown_min,
     window: "18:00–06:00 (Pakistan time) — fixed, not adjustable here",
     phase: state.phase,
     active: state.phase !== "idle",
@@ -347,6 +358,12 @@ dashboard.get("/autoshift", async (c) => {
     stop_reason: state.stop_reason ?? null,
     trigger_voltage: state.trigger_voltage,
     until: state.until_ts ? new Date(state.until_ts * 1000).toISOString() : null,
+    min_on_until: state.relay_closed_ts
+      ? new Date((state.relay_closed_ts + Math.min(cfg.min_on_min, cfg.duration_min) * 60) * 1000).toISOString()
+      : null,
+    cooldown_until: state.last_end_ts
+      ? new Date((state.last_end_ts + cfg.cooldown_min * 60) * 1000).toISOString()
+      : null,
   });
 });
 
@@ -383,6 +400,16 @@ dashboard.post("/autoshift", requireFullAccess, async (c) => {
     const w = Number(body.pv_stop_w);
     if (!Number.isFinite(w) || w < 50 || w > 2000) return c.json({ success: false, error: "pv_stop_w must be between 50 and 2000 W" }, 400);
     cfg.pv_stop_w = Math.round(w);
+  }
+  if (body.min_on_min != null) {
+    const m = Number(body.min_on_min);
+    if (!Number.isInteger(m) || m < 0 || m > 120) return c.json({ success: false, error: "min_on_min must be an integer between 0 and 120" }, 400);
+    cfg.min_on_min = m;
+  }
+  if (body.cooldown_min != null) {
+    const m = Number(body.cooldown_min);
+    if (!Number.isInteger(m) || m < 0 || m > 240) return c.json({ success: false, error: "cooldown_min must be an integer between 0 and 240" }, 400);
+    cfg.cooldown_min = m;
   }
 
   await setState(env, "autoshift_cfg", JSON.stringify(cfg));
@@ -423,7 +450,7 @@ dashboard.post("/autoshift", requireFullAccess, async (c) => {
   }
 
   await logEvent(env, "autoshift", `Auto-shift settings updated`,
-    `${cfg.enabled ? "Enabled" : "Disabled"} · trigger ≤ ${cfg.threshold_v} V (18:00–06:00 only) · hold up to ${cfg.duration_min} min · stop early at PV ≥ ${cfg.pv_stop_w} W`);
+    `${cfg.enabled ? "Enabled" : "Disabled"} · trigger ≤ ${cfg.threshold_v} V (18:00–06:00 only) · hold up to ${cfg.duration_min} min · stop early at PV ≥ ${cfg.pv_stop_w} W · relay protection: ${cfg.min_on_min} min minimum ON, ${cfg.cooldown_min} min cooldown`);
 
   return c.json({ success: true, ...cfg, cancellation_pending: cancellationPending });
 });

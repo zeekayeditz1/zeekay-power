@@ -427,7 +427,7 @@
     <div class="card">
       <div class="cd-head"><span class="cd-title">Auto-shift to WAPDA</span><span class="cd-sub">nighttime only (6 PM\u20136 AM) \u00b7 voltage-triggered</span></div>
       <div class="relay-row">
-        <div><div class="label">Enable auto-shift</div><div class="desc">Only arms between 6 PM and 6 AM. Closes the WAPDA relay once battery voltage drops to the trigger below, then rechecks every minute for real grid power before starting the clock \u2014 a closed relay proves nothing if WAPDA itself is down. The charge ends early if PV recovers past the stop threshold, or if the duration runs out.</div></div>
+        <div><div class="label">Enable auto-shift</div><div class="desc">Only arms between 6 PM and 6 AM. Closes the WAPDA relay once battery voltage drops to the trigger below, then rechecks every minute for real grid power before starting the clock \u2014 a closed relay proves nothing if WAPDA itself is down. The charge ends early if PV recovers past the stop threshold, or if the duration runs out.<br><br><b>Relay protection:</b> a cycle never starts if it would have to stop straight away, the relay stays closed for the minimum ON time once switched, and no new cycle can begin until the cooldown has passed. If the breaker is opened by anything else \u2014 the Tuya app, a schedule on the device, or mains cycling it \u2014 the cycle ends instead of switching it back on.</div></div>
         <div class="toggle" id="asToggle" role="switch" aria-checked="false" tabindex="0"><i></i></div>
       </div>
       <div class="settings-grid">
@@ -442,6 +442,14 @@
         <div>
           <label>Stop early once PV reaches (W)</label>
           <input type="number" id="asPvStop" step="10" min="50" max="2000" value="200">
+        </div>
+        <div>
+          <label>Minimum time relay stays ON (minutes)</label>
+          <input type="number" id="asMinOn" step="1" min="0" max="120" value="15">
+        </div>
+        <div>
+          <label>Cooldown before next cycle (minutes)</label>
+          <input type="number" id="asCooldown" step="1" min="0" max="240" value="30">
         </div>
       </div>
       <div class="as-status" id="asStatus">Loading settings\u2026</div>
@@ -651,12 +659,19 @@
       if(document.activeElement!==$("asThreshold")) $("asThreshold").value = r.threshold_v;
       if(document.activeElement!==$("asDuration")) $("asDuration").value = r.duration_min;
       if(document.activeElement!==$("asPvStop")) $("asPvStop").value = r.pv_stop_w;
+      if(document.activeElement!==$("asMinOn")) $("asMinOn").value = r.min_on_min;
+      if(document.activeElement!==$("asCooldown")) $("asCooldown").value = r.cooldown_min;
+      const holdNote = r.min_on_until && new Date(r.min_on_until) > new Date()
+        ? " · relay held closed until "+fmtTime(r.min_on_until)+" (minimum ON)" : "";
+      const coolNote = r.cooldown_until && new Date(r.cooldown_until) > new Date()
+        ? " · next cycle can start after "+fmtTime(r.cooldown_until) : "";
       let msg;
       if(r.stopping) msg = "Turning WAPDA OFF — waiting for physical relay confirmation; the cloud controller will retry each minute";
       else if(r.charging) msg = "Charging now — WAPDA confirmed present, held until "+fmtTime(r.until)+" at the latest (triggered at "+fmt(r.trigger_voltage,1)+" V) — ends sooner if PV reaches "+fmt(r.pv_stop_w,0)+" W";
       else if(r.active) msg = "Waiting for WAPDA — relay closed, battery at "+fmt(r.trigger_voltage,1)+" V, rechecking every minute for real grid power (a full "+r.duration_min+"-min charge starts the instant it's confirmed)";
       else if(r.enabled) msg = "Watching, 6 PM–6 AM only — closes WAPDA relay if battery drops to "+fmt(r.threshold_v,1)+" V, waits for real grid before charging, ends early once PV hits "+fmt(r.pv_stop_w,0)+" W";
       else msg = "Disabled — battery voltage will not auto-switch WAPDA";
+      if(r.enabled) msg += (r.active ? holdNote : coolNote);
       $("asStatus").textContent = msg;
     }catch(e){ /* leave last known state on screen */ }
   }
@@ -668,7 +683,9 @@
       const threshold_v = parseFloat($("asThreshold").value);
       const duration_min = parseInt($("asDuration").value,10);
       const pv_stop_w = parseInt($("asPvStop").value,10);
-      const r = await api("/api/autoshift",{method:"POST",body:JSON.stringify({enabled,threshold_v,duration_min,pv_stop_w})});
+      const min_on_min = parseInt($("asMinOn").value,10);
+      const cooldown_min = parseInt($("asCooldown").value,10);
+      const r = await api("/api/autoshift",{method:"POST",body:JSON.stringify({enabled,threshold_v,duration_min,pv_stop_w,min_on_min,cooldown_min})});
       if(r && r.success===false) throw new Error(r.error||"save failed");
       toast("Auto-shift settings saved","ok");
       await loadAutoshift(); loadEvents();

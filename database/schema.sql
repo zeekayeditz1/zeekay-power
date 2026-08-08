@@ -107,8 +107,17 @@ CREATE TABLE IF NOT EXISTS api_keys (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     key_hash TEXT NOT NULL UNIQUE,   -- SHA-256 of the key; plaintext is never stored
-    scope TEXT NOT NULL DEFAULT 'full',  -- 'full' | 'read_only'
+    scope TEXT NOT NULL DEFAULT 'read_only' CHECK (scope IN ('full', 'read_only')),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_used_at TEXT,
     revoked INTEGER NOT NULL DEFAULT 0
+);
+
+-- ==========================
+-- LOGIN THROTTLE (fixed window, keyed by a hash of the client IP)
+-- ==========================
+CREATE TABLE IF NOT EXISTS auth_rate_limits (
+    key TEXT PRIMARY KEY,            -- SHA-256 of the client address, never the address itself
+    window_start INTEGER NOT NULL,
+    attempts INTEGER NOT NULL
 );
