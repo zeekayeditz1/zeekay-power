@@ -476,13 +476,20 @@
 
     <div class="card unit-lock-card" id="unitLockCard">
       <div class="cd-head"><span class="cd-title">Units Lock</span><span class="unit-lock-badge" id="ulBadge">LOADING</span></div>
-      <div class="cycles-note" style="margin-top:4px">Fixed Tuya safety limit: tracks WAPDA energy from 5 PM to 6 AM. At 6.00 units, WAPDA is forced OFF and auto-shift stays disabled until 8 AM.</div>
+      <div class="cycles-note" style="margin-top:4px">Tracks WAPDA energy from Tuya between 5 PM and 6 AM. At your selected limit, WAPDA is forced OFF and auto-shift stays disabled until 8 AM.</div>
+      <div class="settings-grid" style="align-items:end;margin-bottom:8px">
+        <div>
+          <label for="ulLimitInput">Nightly limit (kWh / units)</label>
+          <input type="number" id="ulLimitInput" step="0.1" min="0.1" max="50" value="6">
+        </div>
+        <div><button class="ghost-btn" id="ulSaveBtn" style="margin:0">Save Units Lock limit</button></div>
+      </div>
       <div class="unit-lock-main"><span class="used mono" id="ulUsed">--</span><span class="limit">/ <b id="ulLimit">6.00</b> kWh used</span></div>
       <div class="bar"><i id="ulBar" style="width:0%"></i></div>
       <div class="tiles" style="margin-top:14px">
         <div class="tile"><div class="tk">Remaining</div><div class="tv mono"><span id="ulRemaining">--</span> <small>kWh</small></div></div>
         <div class="tile"><div class="tk">Tracking window</div><div class="tv" style="font-size:15px">5 PM &ndash; 6 AM</div></div>
-        <div class="tile"><div class="tk">Warning</div><div class="tv" style="font-size:15px">at 5.00 kWh</div></div>
+        <div class="tile"><div class="tk">Warning</div><div class="tv" style="font-size:15px">at <span id="ulWarning">5.00</span> kWh</div></div>
         <div class="tile"><div class="tk">Locked until</div><div class="tv" style="font-size:15px" id="ulUnlock">&mdash;</div></div>
       </div>
       <div class="as-status" id="ulStatus" style="margin-top:14px">Waiting for the next Tuya sample...</div>
@@ -544,7 +551,8 @@
 
   let token = null;
   try { token = localStorage.getItem(TOKEN_KEY); } catch(e){}
-  let pollTimer = null;
+  let statusTimer = null;
+  let activityTimer = null;
   let slowTimer = null;
   let chartRange = 24;
   let lastStatus = null;
@@ -590,7 +598,8 @@
   function handleLogout(silent){
     token=null;
     try{ localStorage.removeItem(TOKEN_KEY); }catch(e){}
-    if(pollTimer){ clearInterval(pollTimer); pollTimer=null; }
+    if(statusTimer){ clearInterval(statusTimer); statusTimer=null; }
+    if(activityTimer){ clearInterval(activityTimer); activityTimer=null; }
     if(slowTimer){ clearInterval(slowTimer); slowTimer=null; }
     showLogin();
     if(!silent) toast("Signed out","ok");
@@ -693,21 +702,23 @@
     ulCard.classList.toggle("warning",!ulLocked && ulUsed>=ulWarning);
     $("ulUsed").textContent=fmt(ulUsed,2);
     $("ulLimit").textContent=fmt(ulLimit,2);
+    $("ulWarning").textContent=fmt(ulWarning,2);
+    if(document.activeElement!==$("ulLimitInput")) $("ulLimitInput").value=String(ulLimit);
     $("ulRemaining").textContent=fmt(Math.max(0,ulLimit-ulUsed),2);
     $("ulBar").style.width=Math.max(0,Math.min(100,ulLimit>0?ulUsed/ulLimit*100:0))+"%";
     $("ulUnlock").textContent=ulLocked?fmtTime(s.unit_lock_unlock_at):"Not locked";
     let ulBadge="WAITING", ulMsg="The next Tuya units window starts at 5 PM.";
     if(ulLocked){
       ulBadge="LOCKED OFF";
-      ulMsg="6-unit limit reached. WAPDA is forced OFF and auto-shift cannot run, even if the battery reaches 0%, until "+fmtTime(s.unit_lock_unlock_at)+".";
+      ulMsg=fmt(ulLimit,2)+" kWh limit reached. WAPDA is forced OFF and auto-shift cannot run, even if the battery reaches 0%, until "+fmtTime(s.unit_lock_unlock_at)+".";
     }else if(s.unit_lock_phase==="tracking"){
       ulBadge=ulUsed>=ulWarning?"WARNING":"TRACKING";
       ulMsg=ulUsed>=ulWarning
         ? "Warning: "+fmt(ulUsed,2)+" kWh used. Only "+fmt(Math.max(0,ulLimit-ulUsed),2)+" kWh remains before WAPDA locks OFF."
-        : "Tracking Tuya energy from 5 PM to 6 AM. Auto-shift continues normally while usage stays below 6.00 kWh.";
+        : "Tracking Tuya energy from 5 PM to 6 AM. Auto-shift continues normally while usage stays below "+fmt(ulLimit,2)+" kWh.";
     }else if(s.unit_lock_phase==="release_hold"){
       ulBadge="HOLDING OFF";
-      ulMsg="The night window has ended, but the 6-unit lock remains enforced until 8 AM.";
+      ulMsg="The night window has ended, but the "+fmt(ulLimit,2)+" kWh lock remains enforced until 8 AM.";
     }else if(ulUsed>0){
       ulBadge="WINDOW DONE";
       ulMsg="The last 5 PM–6 AM window used "+fmt(ulUsed,2)+" kWh and stayed below the limit, so auto-shift was not disabled.";
@@ -719,6 +730,23 @@
     $("ulBadge").textContent=ulBadge;
     $("ulStatus").textContent=ulMsg;
     setConn(s.stale || s.data_available===false ? "warn" : "live");
+  }
+
+  /* ---------------- editable Units Lock limit ---------------- */
+  let unitLockBusy=false;
+  async function saveUnitLock(){
+    if(unitLockBusy) return;
+    const limit=Number($("ulLimitInput").value);
+    if(!Number.isFinite(limit)||limit<0.1||limit>50){ toast("Enter a limit from 0.1 to 50 kWh","err"); return; }
+    unitLockBusy=true;
+    const btn=$("ulSaveBtn"), original=btn.textContent;
+    btn.disabled=true; btn.textContent="Saving…";
+    try{
+      const r=await api("/api/unit-lock",{method:"POST",body:JSON.stringify({limit_kwh:limit})});
+      toast(r.will_lock_next_tick?"Limit saved — safety lock will apply on the next cloud tick":"Units Lock limit saved","ok");
+      await Promise.all([loadStatus(),loadAutoshift(),loadEvents()]);
+    }catch(e){ toast(e.message||"Could not save Units Lock limit","err"); }
+    finally{ unitLockBusy=false; btn.disabled=false; btn.textContent=original; }
   }
 
   /* ---------------- auto-shift-to-WAPDA settings ---------------- */
@@ -742,7 +770,7 @@
       const coolNote = r.cooldown_until && new Date(r.cooldown_until) > new Date()
         ? " · next cycle can start after "+fmtTime(r.cooldown_until) : "";
       let msg;
-      if(r.units_locked) msg = "Disabled by Units Lock — 6.00 kWh was reached, so WAPDA and auto-shift stay OFF until "+fmtTime(r.unit_lock_unlock_at)+", even if the battery becomes empty";
+      if(r.units_locked) msg = "Disabled by Units Lock — "+fmt(r.unit_lock_limit_kwh||6,2)+" kWh was reached, so WAPDA and auto-shift stay OFF until "+fmtTime(r.unit_lock_unlock_at)+", even if the battery becomes empty";
       else if(r.stopping) msg = "Turning WAPDA OFF — waiting for physical relay confirmation; the cloud controller will retry each minute";
       else if(r.charging) msg = "Charging now — WAPDA confirmed present, held until "+fmtTime(r.until)+" at the latest (triggered at "+fmt(r.trigger_voltage,1)+" V) — ends sooner if PV reaches "+fmt(r.pv_stop_w,0)+" W";
       else if(r.active) msg = "Waiting for WAPDA — relay closed, battery at "+fmt(r.trigger_voltage,1)+" V, rechecking every minute for real grid power (a full "+r.duration_min+"-min charge starts the instant it's confirmed)";
@@ -933,14 +961,23 @@
     setTimeout(()=>["kBatt","kSolar","kLoad","socNow"].forEach(id=>$(id).classList.remove("skl")),1200);
   }
 
+  function shouldPoll(){
+    return document.visibilityState==="visible" && document.getElementById("app").style.display!=="none";
+  }
+
   async function boot(){
     setConn("connecting");
     skeleton();
     await Promise.all([loadStatus(), loadHistory(), loadEvents(), loadAutoshift(), loadCycles(), loadApiKeys()]);
-    if(pollTimer) clearInterval(pollTimer);
+    if(statusTimer) clearInterval(statusTimer);
+    if(activityTimer) clearInterval(activityTimer);
     if(slowTimer) clearInterval(slowTimer);
-    pollTimer = setInterval(()=>{ loadStatus(); loadEvents(); loadAutoshift(); }, 15000);
-    slowTimer = setInterval(()=>{ if(document.getElementById("app").style.display!=="none") { loadHistory(); loadCycles(); } }, 60000);
+    // The cloud controller itself still samples hardware every minute. The
+    // page polls only as often as the data changes to stay gentle on the
+    // Cloudflare free plan, while manual actions refresh immediately.
+    statusTimer = setInterval(()=>{ if(shouldPoll()) loadStatus(); }, 30000);
+    activityTimer = setInterval(()=>{ if(shouldPoll()) { loadEvents(); loadAutoshift(); } }, 60000);
+    slowTimer = setInterval(()=>{ if(shouldPoll()) { loadHistory(); loadCycles(); } }, 300000);
   }
 
   /* ---------------- controls ---------------- */
@@ -973,8 +1010,12 @@
   });
 
   $("refreshBtn").addEventListener("click", ()=>{ loadStatus(); loadHistory(); loadEvents(); loadAutoshift(); loadCycles(); loadApiKeys(); });
+  document.addEventListener("visibilitychange",()=>{
+    if(shouldPoll()) { loadStatus(); loadEvents(); loadAutoshift(); }
+  });
   $("asToggle").addEventListener("click", ()=>{ if($("asToggle").classList.contains("busy")){ toast("Units Lock controls auto-shift until 8 AM","err"); return; } $("asToggle").classList.toggle("on"); });
   $("asToggle").addEventListener("keydown",(e)=>{ if(e.key===" "||e.key==="Enter"){ e.preventDefault(); if($("asToggle").classList.contains("busy")){ toast("Units Lock controls auto-shift until 8 AM","err"); return; } $("asToggle").classList.toggle("on"); } });
+  $("ulSaveBtn").addEventListener("click", saveUnitLock);
   $("asSaveBtn").addEventListener("click", saveAutoshift);
   $("akCreateBtn").addEventListener("click", createApiKeyUI);
   $("akCopyBtn").addEventListener("click", async ()=>{

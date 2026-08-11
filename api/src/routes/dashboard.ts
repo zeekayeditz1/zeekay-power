@@ -21,10 +21,12 @@ import {
   normalizeAutoshiftState,
 } from "../services/autoshift";
 import {
-  UNIT_LOCK_LIMIT_KWH,
-  UNIT_LOCK_WARNING_KWH,
+  UNIT_LOCK_MAX_KWH,
+  UNIT_LOCK_MIN_KWH,
   isUnitLockEnforced,
+  normalizeUnitLockConfig,
   normalizeUnitLockState,
+  unitLockWarningKwh,
   unitLockWindow,
 } from "../services/unitLock";
 
@@ -53,6 +55,15 @@ function toIso(s: string | null): string | null {
   return s.includes("T") ? s : s.replace(" ", "T") + "Z";
 }
 
+async function loadUnitLockConfig(env: any) {
+  try {
+    const raw = await getState(env, "unit_lock_cfg", "");
+    return normalizeUnitLockConfig(raw ? JSON.parse(raw) : null);
+  } catch {
+    return normalizeUnitLockConfig(null);
+  }
+}
+
 async function snapshot(env: any) {
   const relay = parseInt(await getState(env, "relay_state", "0"), 10) === 1 ? 1 : 0;
   const mode = await getState(env, "mode", "auto");
@@ -66,6 +77,8 @@ async function snapshot(env: any) {
     const raw = await getState(env, "unit_lock_state", "");
     unitLock = normalizeUnitLockState(raw ? JSON.parse(raw) : null);
   } catch {}
+  const unitConfig = await loadUnitLockConfig(env);
+  const unitWarningKwh = unitLockWarningKwh(unitConfig.limit_kwh);
   const nowEpoch = Math.floor(Date.now() / 1000);
   const currentUnitWindow = unitLockWindow(nowEpoch);
   const unitLockEnforced = isUnitLockEnforced(unitLock, nowEpoch);
@@ -161,10 +174,10 @@ async function snapshot(env: any) {
         discharge_today_kwh: s.discharge_today_kwh,
         breaker_online: s.breaker_online,
         breaker_energy_kwh: tuya?.energy_total_kwh ?? s.breaker_energy_kwh ?? null,
-        unit_lock_limit_kwh: UNIT_LOCK_LIMIT_KWH,
-        unit_lock_warning_kwh: UNIT_LOCK_WARNING_KWH,
+        unit_lock_limit_kwh: unitConfig.limit_kwh,
+        unit_lock_warning_kwh: unitWarningKwh,
         unit_lock_used_kwh: Math.round(unitLock.used_kwh * 100) / 100,
-        unit_lock_remaining_kwh: Math.round(Math.max(0, UNIT_LOCK_LIMIT_KWH - unitLock.used_kwh) * 100) / 100,
+        unit_lock_remaining_kwh: Math.round(Math.max(0, unitConfig.limit_kwh - unitLock.used_kwh) * 100) / 100,
         unit_lock_locked: unitLockEnforced,
         unit_lock_phase: unitLockPhase,
         unit_lock_window_start: unitLock.window_start_ts ? new Date(unitLock.window_start_ts * 1000).toISOString() : null,
@@ -248,10 +261,10 @@ async function snapshot(env: any) {
     discharge_today_kwh: null,
     breaker_online: tuya?.online ?? null,
     breaker_energy_kwh: tuya?.energy_total_kwh ?? null,
-    unit_lock_limit_kwh: UNIT_LOCK_LIMIT_KWH,
-    unit_lock_warning_kwh: UNIT_LOCK_WARNING_KWH,
+    unit_lock_limit_kwh: unitConfig.limit_kwh,
+    unit_lock_warning_kwh: unitWarningKwh,
     unit_lock_used_kwh: Math.round(unitLock.used_kwh * 100) / 100,
-    unit_lock_remaining_kwh: Math.round(Math.max(0, UNIT_LOCK_LIMIT_KWH - unitLock.used_kwh) * 100) / 100,
+    unit_lock_remaining_kwh: Math.round(Math.max(0, unitConfig.limit_kwh - unitLock.used_kwh) * 100) / 100,
     unit_lock_locked: unitLockEnforced,
     unit_lock_phase: unitLockPhase,
     unit_lock_window_start: unitLock.window_start_ts ? new Date(unitLock.window_start_ts * 1000).toISOString() : null,
@@ -273,6 +286,76 @@ async function snapshot(env: any) {
 dashboard.get("/status", async (c) => {
   const status = await snapshot(c.env as any);
   return c.json({ success: true, status });
+});
+
+/* ---------- Editable Tuya-based Units Lock limit ---------- */
+dashboard.get("/unit-lock", async (c) => {
+  const env = c.env as any;
+  const config = await loadUnitLockConfig(env);
+  let state = normalizeUnitLockState(null);
+  try {
+    const raw = await getState(env, "unit_lock_state", "");
+    state = normalizeUnitLockState(raw ? JSON.parse(raw) : null);
+  } catch {}
+  const now = Math.floor(Date.now() / 1000);
+  return c.json({
+    success: true,
+    limit_kwh: config.limit_kwh,
+    warning_kwh: unitLockWarningKwh(config.limit_kwh),
+    min_kwh: UNIT_LOCK_MIN_KWH,
+    max_kwh: UNIT_LOCK_MAX_KWH,
+    used_kwh: Math.round(state.used_kwh * 100) / 100,
+    locked: isUnitLockEnforced(state, now),
+    unlock_at: state.unlock_ts ? new Date(state.unlock_ts * 1000).toISOString() : null,
+  });
+});
+
+dashboard.post("/unit-lock", requireFullAccess, async (c) => {
+  const env = c.env as any;
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ success: false, message: "A JSON body is required" }, 400);
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body) || !("limit_kwh" in body)) {
+    return c.json({ success: false, message: "limit_kwh is required" }, 400);
+  }
+  const requested = Number((body as { limit_kwh: unknown }).limit_kwh);
+  if (!Number.isFinite(requested) || requested < UNIT_LOCK_MIN_KWH || requested > UNIT_LOCK_MAX_KWH) {
+    return c.json({
+      success: false,
+      message: `Units Lock limit must be between ${UNIT_LOCK_MIN_KWH} and ${UNIT_LOCK_MAX_KWH} kWh`,
+    }, 400);
+  }
+
+  const config = normalizeUnitLockConfig({ limit_kwh: requested });
+  await setState(env, "unit_lock_cfg", JSON.stringify(config));
+
+  let state = normalizeUnitLockState(null);
+  try {
+    const raw = await getState(env, "unit_lock_state", "");
+    state = normalizeUnitLockState(raw ? JSON.parse(raw) : null);
+  } catch {}
+  const now = Math.floor(Date.now() / 1000);
+  const locked = isUnitLockEnforced(state, now);
+  const willLockNextTick = !locked && unitLockWindow(now).active && state.used_kwh >= config.limit_kwh;
+  await logEvent(env, "unit_lock", `Units Lock limit set to ${config.limit_kwh.toFixed(2)} kWh`,
+    locked
+      ? "The current lock remains enforced until 08:00; changing the value cannot release it early."
+      : willLockNextTick
+        ? "Current Tuya usage is already at or above this value, so WAPDA and auto-shift will be turned OFF on the next one-minute cloud tick."
+        : `The new limit will be enforced from Tuya usage during the active 17:00–06:00 window. Warning starts at ${unitLockWarningKwh(config.limit_kwh).toFixed(2)} kWh.`);
+
+  return c.json({
+    success: true,
+    limit_kwh: config.limit_kwh,
+    warning_kwh: unitLockWarningKwh(config.limit_kwh),
+    used_kwh: Math.round(state.used_kwh * 100) / 100,
+    locked,
+    will_lock_next_tick: willLockNextTick,
+    applies_within_seconds: 60,
+  });
 });
 
 /* ---------- GET /api/history?hours=24 ---------- */
@@ -331,10 +414,11 @@ dashboard.post("/relay", requireFullAccess, async (c) => {
       const raw = await getState(c.env as any, "unit_lock_state", "");
       const unitLock = normalizeUnitLockState(raw ? JSON.parse(raw) : null);
       if (isUnitLockEnforced(unitLock, nowEpoch)) {
+        const unitConfig = await loadUnitLockConfig(c.env as any);
         const unlockAt = unitLock.unlock_ts ? new Date(unitLock.unlock_ts * 1000).toISOString() : null;
         return c.json({
           success: false,
-          message: "WAPDA is locked OFF because the 6-unit limit was reached",
+          message: `WAPDA is locked OFF because the ${unitConfig.limit_kwh.toFixed(2)} kWh limit was reached`,
           code: "UNIT_LOCK_ACTIVE",
           unlock_at: unlockAt,
         }, 423);
@@ -444,6 +528,7 @@ dashboard.get("/autoshift", async (c) => {
     const raw = await getState(env, "unit_lock_state", "");
     unitLock = normalizeUnitLockState(raw ? JSON.parse(raw) : null);
   } catch {}
+  const unitConfig = await loadUnitLockConfig(env);
   const unitsLocked = isUnitLockEnforced(unitLock, Math.floor(Date.now() / 1000));
 
   return c.json({
@@ -461,6 +546,7 @@ dashboard.get("/autoshift", async (c) => {
     stopping: state.phase === "stopping",
     stop_reason: state.stop_reason ?? null,
     units_locked: unitsLocked,
+    unit_lock_limit_kwh: unitConfig.limit_kwh,
     unit_lock_unlock_at: unitLock.unlock_ts ? new Date(unitLock.unlock_ts * 1000).toISOString() : null,
     trigger_voltage: state.trigger_voltage,
     until: state.until_ts ? new Date(state.until_ts * 1000).toISOString() : null,
@@ -501,11 +587,12 @@ dashboard.post("/autoshift", requireFullAccess, async (c) => {
     }
   }
   const settingsNow = Math.floor(Date.now() / 1000);
+  const unitConfigForSettings = await loadUnitLockConfig(env);
   const unitsLocked = isUnitLockEnforced(unitLockForSettings, settingsNow);
   if (body.enabled === true && unitsLocked) {
     return c.json({
       success: false,
-      message: "Auto-shift cannot be enabled while the 6-unit WAPDA lock is active",
+      message: `Auto-shift cannot be enabled while the ${unitConfigForSettings.limit_kwh.toFixed(2)} kWh WAPDA lock is active`,
       code: "UNIT_LOCK_ACTIVE",
       unlock_at: unitLockForSettings.unlock_ts
         ? new Date(unitLockForSettings.unlock_ts * 1000).toISOString()

@@ -3,7 +3,10 @@ import {
   EMPTY_UNIT_LOCK_STATE,
   UNIT_LOCK_LIMIT_KWH,
   isUnitLockEnforced,
+  normalizeUnitLockConfig,
   planUnitLock,
+  reconcileUnitLockAutoshift,
+  unitLockWarningKwh,
   unitLockWindow,
 } from "../../src/services/unitLock";
 
@@ -88,6 +91,58 @@ describe("Tuya energy accounting", () => {
 });
 
 describe("lock enforcement and reset", () => {
+  it("turns auto-shift OFF at the limit and restores it exactly at 08:00", () => {
+    const t0 = PKT("2026-08-11", 17, 0);
+    let lockPlan = planUnitLock(null, { nowTs: t0, energyTotalKwh: 100, powerW: 0 });
+    lockPlan = planUnitLock(lockPlan.state, {
+      nowTs: PKT("2026-08-12", 1, 0),
+      energyTotalKwh: 106,
+      powerW: 0,
+    });
+
+    const disabled = reconcileUnitLockAutoshift(lockPlan.state, lockPlan, true);
+    expect(lockPlan.just_locked).toBe(true);
+    expect(lockPlan.enforce_off).toBe(true);
+    expect(disabled.enabled).toBe(false);
+    expect(disabled.disabled_by_lock).toBe(true);
+    expect(disabled.state.restore_autoshift_on_unlock).toBe(true);
+
+    const releasePlan = planUnitLock(disabled.state, {
+      nowTs: PKT("2026-08-12", 8, 0),
+      energyTotalKwh: 106,
+      powerW: 0,
+    });
+    const restored = reconcileUnitLockAutoshift(releasePlan.state, releasePlan, disabled.enabled);
+    expect(releasePlan.just_unlocked).toBe(true);
+    expect(releasePlan.enforce_off).toBe(false);
+    expect(restored.enabled).toBe(true);
+    expect(restored.restored_at_release).toBe(true);
+    expect(restored.state.restore_autoshift_on_unlock).toBe(false);
+  });
+
+  it("uses an editable limit immediately without releasing an existing lock early", () => {
+    expect(normalizeUnitLockConfig({ limit_kwh: 4.5 }).limit_kwh).toBe(4.5);
+    expect(unitLockWarningKwh(4.5)).toBe(3.6);
+
+    const t0 = PKT("2026-08-11", 17, 0);
+    let plan = planUnitLock(null, { nowTs: t0, energyTotalKwh: 10, powerW: 0 }, { limit_kwh: 4.5 });
+    plan = planUnitLock(plan.state, {
+      nowTs: t0 + 3600,
+      energyTotalKwh: 14.5,
+      powerW: 0,
+    }, { limit_kwh: 4.5 });
+    expect(plan.just_locked).toBe(true);
+    expect(plan.state.limit_kwh).toBe(4.5);
+
+    plan = planUnitLock(plan.state, {
+      nowTs: t0 + 7200,
+      energyTotalKwh: 14.5,
+      powerW: 0,
+    }, { limit_kwh: 10 });
+    expect(plan.enforce_off).toBe(true);
+    expect(plan.state.limit_kwh).toBe(10);
+  });
+
   it("keeps WAPDA locked after 06:00 and unlocks at 08:00", () => {
     const t0 = PKT("2026-08-11", 17, 0);
     let plan = planUnitLock(null, { nowTs: t0, energyTotalKwh: 50, powerW: 0 });

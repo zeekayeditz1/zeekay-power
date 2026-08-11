@@ -1,0 +1,17 @@
+{
+  "name": "zeekay-power-test",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-25",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "APP_NAME": "Zeekay Power Test",
+    "JWT_SECRET": "test-only-secret-not-used-in-production"
+  },
+  "d1_databases": [
+    {
+      "binding": "zeekay_power_db",
+      "database_name": "zeekay-power-test-db",
+      "database_id": "00000000-0000-0000-0000-000000000001"
+    }
+  ]
+}

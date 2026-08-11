@@ -30,15 +30,17 @@ import {
   planAutoshift,
 } from "./autoshift";
 import {
-  UNIT_LOCK_LIMIT_KWH,
-  UNIT_LOCK_WARNING_KWH,
+  UnitLockConfig,
   UnitLockState,
   isUnitLockEnforced,
   mayRetryUnitLockOff,
+  normalizeUnitLockConfig,
   normalizeUnitLockState,
   planUnitLock,
+  reconcileUnitLockAutoshift,
   recordUnitLockOffAttempt,
   recordUnitLockOffConfirmed,
+  unitLockWarningKwh,
 } from "./unitLock";
 
 const r2 = (x: number | null | undefined) => (x == null ? null : Math.round(x * 100) / 100);
@@ -212,7 +214,14 @@ export async function runSocTick(env: any) {
       asState = normalizeAutoshiftState(raw ? JSON.parse(raw) : null);
     } catch {}
 
-    // --- WAPDA units lock (Tuya only; 17:00-06:00, hard limit 6 kWh) ---
+    // --- WAPDA units lock (Tuya only; 17:00-06:00, editable hard limit) ---
+    let unitConfig: UnitLockConfig = normalizeUnitLockConfig(null);
+    try {
+      const raw = await getState(env, "unit_lock_cfg", "");
+      unitConfig = normalizeUnitLockConfig(raw ? JSON.parse(raw) : null);
+    } catch {}
+    const unitWarningKwh = unitLockWarningKwh(unitConfig.limit_kwh);
+
     let unitState: UnitLockState = normalizeUnitLockState(null);
     try {
       const raw = await getState(env, "unit_lock_state", "");
@@ -229,43 +238,39 @@ export async function runSocTick(env: any) {
       powerW: tuya?.grid_power ?? null,
       voltageV: tuya?.grid_voltage ?? null,
       currentA: tuya?.grid_current ?? null,
-    });
+    }, unitConfig);
     unitState = unitPlan.state;
 
-    let cfgChangedByUnitLock = false;
-    if (unitPlan.just_unlocked) {
-      if (unitState.restore_autoshift_on_unlock && !cfg.enabled) {
-        cfg = { ...cfg, enabled: true };
-        cfgChangedByUnitLock = true;
-        await logEvent(env, "unit_lock", "Units lock released — auto-shift restored",
-          "It is 08:00 Pakistan time. The 6-unit hold is over and the auto-shift setting that was enabled before the lock has been turned back on.");
-      }
-      unitState = { ...unitState, restore_autoshift_on_unlock: false };
+    const unitAutoshift = reconcileUnitLockAutoshift(unitState, unitPlan, cfg.enabled);
+    unitState = unitAutoshift.state;
+    cfg = { ...cfg, enabled: unitAutoshift.enabled };
+    if (unitAutoshift.restored_at_release) {
+      await logEvent(env, "unit_lock", "Units lock released — auto-shift restored",
+        `It is 08:00 Pakistan time. The ${unitConfig.limit_kwh.toFixed(2)} kWh hold is over and auto-shift has been turned back on.`);
     }
 
     if (unitPlan.warning_reached && !unitPlan.just_locked) {
-      await logEvent(env, "unit_lock", "WAPDA units warning: 5.00 kWh used",
-        `The 17:00–06:00 Tuya window has used ${unitState.used_kwh.toFixed(2)} kWh. WAPDA will be locked OFF at ${UNIT_LOCK_LIMIT_KWH.toFixed(2)} kWh.`);
+      await logEvent(env, "unit_lock", `WAPDA units warning: ${unitWarningKwh.toFixed(2)} kWh used`,
+        `The 17:00–06:00 Tuya window has used ${unitState.used_kwh.toFixed(2)} kWh. WAPDA will be locked OFF at ${unitConfig.limit_kwh.toFixed(2)} kWh.`);
     }
 
     if (unitPlan.just_locked) {
-      unitState = { ...unitState, restore_autoshift_on_unlock: cfg.enabled };
-      await logEvent(env, "unit_lock", "6-unit limit reached — locking WAPDA OFF",
+      await logEvent(env, "unit_lock", `${unitConfig.limit_kwh.toFixed(2)} kWh limit reached — locking WAPDA OFF`,
         `Tuya measured ${unitState.used_kwh.toFixed(2)} kWh since 17:00. The breaker ${tuya?.relay_on ? "is being opened now" : "is already open"}, and auto-shift will remain disabled until 08:00 Pakistan time.`);
     }
 
-    if (unitPlan.enforce_off && cfg.enabled) {
-      unitState = { ...unitState, restore_autoshift_on_unlock: true };
-      cfg = { ...cfg, enabled: false };
-      cfgChangedByUnitLock = true;
-    }
-
-    if (cfgChangedByUnitLock) {
-      // Persist the restore intent before changing auto-shift. If the Worker
-      // is interrupted between these writes, the next tick can still restore
-      // the user's previous setting at 08:00.
-      await setState(env, "unit_lock_state", JSON.stringify(unitState));
-      await setState(env, "autoshift_cfg", JSON.stringify(cfg));
+    if (unitAutoshift.settings_changed) {
+      if (unitAutoshift.restored_at_release) {
+        // At release, turn auto-shift on before clearing restore intent. A
+        // crash between writes leaves a retryable restore marker.
+        await setState(env, "autoshift_cfg", JSON.stringify(cfg));
+        await setState(env, "unit_lock_state", JSON.stringify(unitState));
+      } else {
+        // At lock, persist restore intent before disabling auto-shift. A crash
+        // between writes cannot lose the user's previous ON setting.
+        await setState(env, "unit_lock_state", JSON.stringify(unitState));
+        await setState(env, "autoshift_cfg", JSON.stringify(cfg));
+      }
     }
 
     if (unitPlan.enforce_off) {
@@ -277,7 +282,7 @@ export async function runSocTick(env: any) {
       };
       if (autoWasActive && unitPlan.just_locked) {
         await logEvent(env, "autoshift", "Auto-shift disabled by Units Lock",
-          "The 6.00 kWh WAPDA limit outranks battery voltage and all auto-shift settings until 08:00 Pakistan time.");
+          `The ${unitConfig.limit_kwh.toFixed(2)} kWh WAPDA limit outranks battery voltage and all auto-shift settings until 08:00 Pakistan time.`);
       }
       await setState(env, "autoshift_state", JSON.stringify(asState));
 
@@ -490,11 +495,11 @@ export async function runSocTick(env: any) {
       // breaker
       breaker_online: tuya ? tuya.online : null,
       breaker_energy_kwh: tuya ? tuya.energy_total_kwh : null,
-      // Fixed Tuya-based Units Lock: 17:00-06:00, enforced until 08:00.
-      unit_lock_limit_kwh: UNIT_LOCK_LIMIT_KWH,
-      unit_lock_warning_kwh: UNIT_LOCK_WARNING_KWH,
+      // Tuya-based Units Lock: 17:00-06:00, enforced until 08:00.
+      unit_lock_limit_kwh: unitConfig.limit_kwh,
+      unit_lock_warning_kwh: unitWarningKwh,
       unit_lock_used_kwh: r2(unitState.used_kwh),
-      unit_lock_remaining_kwh: r2(Math.max(0, UNIT_LOCK_LIMIT_KWH - unitState.used_kwh)),
+      unit_lock_remaining_kwh: r2(Math.max(0, unitConfig.limit_kwh - unitState.used_kwh)),
       unit_lock_locked: unitLockEnforced,
       unit_lock_phase: unitLockEnforced
         ? (snap.ts < (unitState.window_end_ts ?? 0) ? "locked" : "release_hold")
