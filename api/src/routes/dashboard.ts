@@ -20,6 +20,13 @@ import {
   normalizeAutoshiftConfig,
   normalizeAutoshiftState,
 } from "../services/autoshift";
+import {
+  UNIT_LOCK_LIMIT_KWH,
+  UNIT_LOCK_WARNING_KWH,
+  isUnitLockEnforced,
+  normalizeUnitLockState,
+  unitLockWindow,
+} from "../services/unitLock";
 
 /*
 |--------------------------------------------------------------------------
@@ -53,6 +60,31 @@ async function snapshot(env: any) {
   let tuya: any = null;
   try { const traw = await getState(env, "tuya_status", ""); if (traw) tuya = JSON.parse(traw); } catch {}
   const relayReal = tuya ? (tuya.relay_on ? 1 : 0) : relay;
+
+  let unitLock = normalizeUnitLockState(null);
+  try {
+    const raw = await getState(env, "unit_lock_state", "");
+    unitLock = normalizeUnitLockState(raw ? JSON.parse(raw) : null);
+  } catch {}
+  const nowEpoch = Math.floor(Date.now() / 1000);
+  const currentUnitWindow = unitLockWindow(nowEpoch);
+  const unitLockEnforced = isUnitLockEnforced(unitLock, nowEpoch);
+  const unitLockPhase = unitLockEnforced
+    ? (nowEpoch < (unitLock.window_end_ts ?? 0) ? "locked" : "release_hold")
+    : currentUnitWindow.active ? "tracking" : "waiting";
+  const wapdaPower = tuya?.grid_power ?? (
+    tuya?.grid_voltage != null && tuya?.grid_current != null
+      ? Number(tuya.grid_voltage) * Number(tuya.grid_current)
+      : null
+  );
+  const tuyaOnlySignals: GridSignals = {
+    relayOn: relayReal === 1,
+    tuyaOnline: tuya?.online ?? null,
+    tuyaGridPower: tuya?.grid_power ?? null,
+    tuyaGridVoltage: tuya?.grid_voltage ?? null,
+  };
+  const wapdaAvailableFromTuya = tuya ? isMainsAvailable(tuyaOnlySignals) : false;
+  const wapdaActiveFromTuya = tuya ? isGridConnected(tuyaOnlySignals) : false;
 
   try {
     const raw = await getState(env, "live_status", "");
@@ -101,6 +133,9 @@ async function snapshot(env: any) {
         voltage: s.load_voltage,
         current: s.load_current,
         power: s.load_power,
+        inverter_power: s.inverter_power ?? s.load_power,
+        inverter_voltage: s.inverter_voltage ?? s.ac_voltage ?? s.load_voltage,
+        inverter_current: s.inverter_current ?? s.load_current,
         energy_today: s.pv_today_kwh,
         grid_power: s.grid_power,
         frequency: s.frequency,
@@ -109,6 +144,12 @@ async function snapshot(env: any) {
         wapda: mainsAvailable,
         mains_available: mainsAvailable,
         grid_connected: gridConnected,
+        wapda_available: wapdaAvailableFromTuya,
+        wapda_active: wapdaActiveFromTuya,
+        wapda_power: tuya ? wapdaPower : null,
+        wapda_voltage: tuya?.grid_voltage ?? null,
+        wapda_current: tuya?.grid_current ?? null,
+        wapda_source: "tuya",
         grid_voltage: s.grid_voltage ?? tuya?.grid_voltage ?? null,
         relay_state: relayReal,
         relay_closed: relayReal === 1,
@@ -119,6 +160,19 @@ async function snapshot(env: any) {
         total_charge_kwh: s.total_charge_kwh,
         discharge_today_kwh: s.discharge_today_kwh,
         breaker_online: s.breaker_online,
+        breaker_energy_kwh: tuya?.energy_total_kwh ?? s.breaker_energy_kwh ?? null,
+        unit_lock_limit_kwh: UNIT_LOCK_LIMIT_KWH,
+        unit_lock_warning_kwh: UNIT_LOCK_WARNING_KWH,
+        unit_lock_used_kwh: Math.round(unitLock.used_kwh * 100) / 100,
+        unit_lock_remaining_kwh: Math.round(Math.max(0, UNIT_LOCK_LIMIT_KWH - unitLock.used_kwh) * 100) / 100,
+        unit_lock_locked: unitLockEnforced,
+        unit_lock_phase: unitLockPhase,
+        unit_lock_window_start: unitLock.window_start_ts ? new Date(unitLock.window_start_ts * 1000).toISOString() : null,
+        unit_lock_window_end: unitLock.window_end_ts ? new Date(unitLock.window_end_ts * 1000).toISOString() : null,
+        unit_lock_unlock_at: unitLock.unlock_ts ? new Date(unitLock.unlock_ts * 1000).toISOString() : null,
+        unit_lock_tracking_since: unitLock.initialized_at_ts ? new Date(unitLock.initialized_at_ts * 1000).toISOString() : null,
+        unit_lock_restore_autoshift: unitLock.restore_autoshift_on_unlock,
+        unit_lock_source: "tuya_meter_with_tuya_power_fallback",
         autoshift_phase: s.autoshift_phase,
         autoshift_active: s.autoshift_active,
         autoshift_charging: s.autoshift_charging,
@@ -161,6 +215,9 @@ async function snapshot(env: any) {
     voltage: null,
     current: null,
     power: null,
+    inverter_power: null,
+    inverter_voltage: null,
+    inverter_current: null,
     energy_today: null,
     grid_power: null,
     grid_voltage: tuya?.grid_voltage ?? null,
@@ -174,6 +231,12 @@ async function snapshot(env: any) {
       tuyaGridPower: tuya?.grid_power,
       tuyaGridVoltage: tuya?.grid_voltage,
     }),
+    wapda_available: wapdaAvailableFromTuya,
+    wapda_active: wapdaActiveFromTuya,
+    wapda_power: tuya ? wapdaPower : null,
+    wapda_voltage: tuya?.grid_voltage ?? null,
+    wapda_current: tuya?.grid_current ?? null,
+    wapda_source: "tuya",
     relay_state: relayReal,
     relay_closed: relayReal === 1,
     mode,
@@ -184,6 +247,19 @@ async function snapshot(env: any) {
     wapda_today_kwh: null,
     discharge_today_kwh: null,
     breaker_online: tuya?.online ?? null,
+    breaker_energy_kwh: tuya?.energy_total_kwh ?? null,
+    unit_lock_limit_kwh: UNIT_LOCK_LIMIT_KWH,
+    unit_lock_warning_kwh: UNIT_LOCK_WARNING_KWH,
+    unit_lock_used_kwh: Math.round(unitLock.used_kwh * 100) / 100,
+    unit_lock_remaining_kwh: Math.round(Math.max(0, UNIT_LOCK_LIMIT_KWH - unitLock.used_kwh) * 100) / 100,
+    unit_lock_locked: unitLockEnforced,
+    unit_lock_phase: unitLockPhase,
+    unit_lock_window_start: unitLock.window_start_ts ? new Date(unitLock.window_start_ts * 1000).toISOString() : null,
+    unit_lock_window_end: unitLock.window_end_ts ? new Date(unitLock.window_end_ts * 1000).toISOString() : null,
+    unit_lock_unlock_at: unitLock.unlock_ts ? new Date(unitLock.unlock_ts * 1000).toISOString() : null,
+    unit_lock_tracking_since: unitLock.initialized_at_ts ? new Date(unitLock.initialized_at_ts * 1000).toISOString() : null,
+    unit_lock_restore_autoshift: unitLock.restore_autoshift_on_unlock,
+    unit_lock_source: "tuya_meter_with_tuya_power_fallback",
     autoshift_phase: "idle",
     autoshift_active: false,
     autoshift_charging: false,
@@ -248,10 +324,31 @@ dashboard.post("/relay", requireFullAccess, async (c) => {
     return c.json({ success: false, message: "state must be 0, 1, false, or true" }, 400);
   }
   const next = validOn ? 1 : 0;
+  const nowEpoch = Math.floor(Date.now() / 1000);
+
+  if (next === 1) {
+    try {
+      const raw = await getState(c.env as any, "unit_lock_state", "");
+      const unitLock = normalizeUnitLockState(raw ? JSON.parse(raw) : null);
+      if (isUnitLockEnforced(unitLock, nowEpoch)) {
+        const unlockAt = unitLock.unlock_ts ? new Date(unitLock.unlock_ts * 1000).toISOString() : null;
+        return c.json({
+          success: false,
+          message: "WAPDA is locked OFF because the 6-unit limit was reached",
+          code: "UNIT_LOCK_ACTIVE",
+          unlock_at: unlockAt,
+        }, 423);
+      }
+    } catch {
+      return c.json({
+        success: false,
+        message: "Units Lock state could not be verified; WAPDA was not switched on",
+      }, 503);
+    }
+  }
 
   // Take the same lock the cron tick uses, so a manual switch can never race a
   // running auto-shift decision.
-  const nowEpoch = Math.floor(Date.now() / 1000);
   const lockExpiresAt = await acquireTickLock(c.env as any, nowEpoch);
   if (lockExpiresAt == null) {
     return c.json({ success: false, message: "The controller is busy; refresh and try again" }, 409);
@@ -342,6 +439,13 @@ dashboard.get("/autoshift", async (c) => {
     state = normalizeAutoshiftState(raw ? JSON.parse(raw) : null);
   } catch {}
 
+  let unitLock = normalizeUnitLockState(null);
+  try {
+    const raw = await getState(env, "unit_lock_state", "");
+    unitLock = normalizeUnitLockState(raw ? JSON.parse(raw) : null);
+  } catch {}
+  const unitsLocked = isUnitLockEnforced(unitLock, Math.floor(Date.now() / 1000));
+
   return c.json({
     success: true,
     enabled: cfg.enabled,
@@ -356,6 +460,8 @@ dashboard.get("/autoshift", async (c) => {
     charging: state.phase === "charging",
     stopping: state.phase === "stopping",
     stop_reason: state.stop_reason ?? null,
+    units_locked: unitsLocked,
+    unit_lock_unlock_at: unitLock.unlock_ts ? new Date(unitLock.unlock_ts * 1000).toISOString() : null,
     trigger_voltage: state.trigger_voltage,
     until: state.until_ts ? new Date(state.until_ts * 1000).toISOString() : null,
     min_on_until: state.relay_closed_ts
@@ -385,6 +491,35 @@ dashboard.post("/autoshift", requireFullAccess, async (c) => {
     cfg = normalizeAutoshiftConfig(raw ? JSON.parse(raw) : cfg);
   } catch {}
 
+  let unitLockForSettings = normalizeUnitLockState(null);
+  try {
+    const raw = await getState(env, "unit_lock_state", "");
+    unitLockForSettings = normalizeUnitLockState(raw ? JSON.parse(raw) : null);
+  } catch {
+    if (body.enabled === true) {
+      return c.json({ success: false, message: "Units Lock state could not be verified; auto-shift was not enabled" }, 503);
+    }
+  }
+  const settingsNow = Math.floor(Date.now() / 1000);
+  const unitsLocked = isUnitLockEnforced(unitLockForSettings, settingsNow);
+  if (body.enabled === true && unitsLocked) {
+    return c.json({
+      success: false,
+      message: "Auto-shift cannot be enabled while the 6-unit WAPDA lock is active",
+      code: "UNIT_LOCK_ACTIVE",
+      unlock_at: unitLockForSettings.unlock_ts
+        ? new Date(unitLockForSettings.unlock_ts * 1000).toISOString()
+        : null,
+    }, 423);
+  }
+  if (!unitsLocked && unitLockForSettings.locked && typeof body.enabled === "boolean") {
+    unitLockForSettings = {
+      ...unitLockForSettings,
+      locked: false,
+      restore_autoshift_on_unlock: false,
+    };
+    await setState(env, "unit_lock_state", JSON.stringify(unitLockForSettings));
+  }
   if (typeof body.enabled === "boolean") cfg.enabled = body.enabled;
   if (body.threshold_v != null) {
     const v = Number(body.threshold_v);

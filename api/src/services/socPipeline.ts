@@ -29,6 +29,17 @@ import {
   normalizeAutoshiftState,
   planAutoshift,
 } from "./autoshift";
+import {
+  UNIT_LOCK_LIMIT_KWH,
+  UNIT_LOCK_WARNING_KWH,
+  UnitLockState,
+  isUnitLockEnforced,
+  mayRetryUnitLockOff,
+  normalizeUnitLockState,
+  planUnitLock,
+  recordUnitLockOffAttempt,
+  recordUnitLockOffConfirmed,
+} from "./unitLock";
 
 const r2 = (x: number | null | undefined) => (x == null ? null : Math.round(x * 100) / 100);
 // Pakistan is UTC+5 (no DST) — local calendar day for "today" counters & the billing-cycle grouping.
@@ -93,7 +104,7 @@ export async function runSocTick(env: any) {
               env,
               "relay",
               tuya.relay_on ? "WAPDA relay closed (ON)" : "WAPDA relay opened (OFF)",
-              "Physical state changed outside this dashboard between Cloudflare polls; an active auto-shift cycle will re-apply its configured state"
+              "Physical state changed outside this dashboard between Cloudflare polls; cloud safety and automation rules are being applied to the new state"
             );
           }
           await setState(env, "relay_command_pending", "");
@@ -122,7 +133,7 @@ export async function runSocTick(env: any) {
       try { await setState(env, "tuya_reachable", nowReachable ? "1" : "0"); } catch {}
     }
 
-    const gridSignals: GridSignals = {
+    let gridSignals: GridSignals = {
       relayOn: !!tuya?.relay_on,
       tuyaOnline: tuya?.online ?? null,
       semsGridPower: snap.grid_power,
@@ -201,11 +212,124 @@ export async function runSocTick(env: any) {
       asState = normalizeAutoshiftState(raw ? JSON.parse(raw) : null);
     } catch {}
 
+    // --- WAPDA units lock (Tuya only; 17:00-06:00, hard limit 6 kWh) ---
+    let unitState: UnitLockState = normalizeUnitLockState(null);
+    try {
+      const raw = await getState(env, "unit_lock_state", "");
+      unitState = normalizeUnitLockState(raw ? JSON.parse(raw) : null);
+    } catch {}
+
+    // A last-known cumulative meter is safe to use as a baseline while Tuya
+    // is temporarily unreachable. Power is never carried forward: integrating
+    // a stale watt reading would fabricate consumption during an outage.
+    const unitMeterSource = tuya ?? previousTuya;
+    const unitPlan = planUnitLock(unitState, {
+      nowTs: snap.ts,
+      energyTotalKwh: unitMeterSource?.energy_total_kwh ?? null,
+      powerW: tuya?.grid_power ?? null,
+      voltageV: tuya?.grid_voltage ?? null,
+      currentA: tuya?.grid_current ?? null,
+    });
+    unitState = unitPlan.state;
+
+    let cfgChangedByUnitLock = false;
+    if (unitPlan.just_unlocked) {
+      if (unitState.restore_autoshift_on_unlock && !cfg.enabled) {
+        cfg = { ...cfg, enabled: true };
+        cfgChangedByUnitLock = true;
+        await logEvent(env, "unit_lock", "Units lock released — auto-shift restored",
+          "It is 08:00 Pakistan time. The 6-unit hold is over and the auto-shift setting that was enabled before the lock has been turned back on.");
+      }
+      unitState = { ...unitState, restore_autoshift_on_unlock: false };
+    }
+
+    if (unitPlan.warning_reached && !unitPlan.just_locked) {
+      await logEvent(env, "unit_lock", "WAPDA units warning: 5.00 kWh used",
+        `The 17:00–06:00 Tuya window has used ${unitState.used_kwh.toFixed(2)} kWh. WAPDA will be locked OFF at ${UNIT_LOCK_LIMIT_KWH.toFixed(2)} kWh.`);
+    }
+
+    if (unitPlan.just_locked) {
+      unitState = { ...unitState, restore_autoshift_on_unlock: cfg.enabled };
+      await logEvent(env, "unit_lock", "6-unit limit reached — locking WAPDA OFF",
+        `Tuya measured ${unitState.used_kwh.toFixed(2)} kWh since 17:00. The breaker ${tuya?.relay_on ? "is being opened now" : "is already open"}, and auto-shift will remain disabled until 08:00 Pakistan time.`);
+    }
+
+    if (unitPlan.enforce_off && cfg.enabled) {
+      unitState = { ...unitState, restore_autoshift_on_unlock: true };
+      cfg = { ...cfg, enabled: false };
+      cfgChangedByUnitLock = true;
+    }
+
+    if (cfgChangedByUnitLock) {
+      // Persist the restore intent before changing auto-shift. If the Worker
+      // is interrupted between these writes, the next tick can still restore
+      // the user's previous setting at 08:00.
+      await setState(env, "unit_lock_state", JSON.stringify(unitState));
+      await setState(env, "autoshift_cfg", JSON.stringify(cfg));
+    }
+
+    if (unitPlan.enforce_off) {
+      const autoWasActive = asState.phase !== "idle" || asState.stop_reason !== "unit_limit";
+      asState = {
+        ...normalizeAutoshiftState(null),
+        last_end_ts: asState.last_end_ts ?? snap.ts,
+        stop_reason: "unit_limit",
+      };
+      if (autoWasActive && unitPlan.just_locked) {
+        await logEvent(env, "autoshift", "Auto-shift disabled by Units Lock",
+          "The 6.00 kWh WAPDA limit outranks battery voltage and all auto-shift settings until 08:00 Pakistan time.");
+      }
+      await setState(env, "autoshift_state", JSON.stringify(asState));
+
+      if (tuya?.relay_on && mayRetryUnitLockOff(unitState, snap.ts)) {
+        const firstAttempt = unitState.command_attempts === 0;
+        unitState = recordUnitLockOffAttempt(unitState, snap.ts);
+        try {
+          await setState(env, "relay_command_pending", JSON.stringify({
+            target: false,
+            source: "cloudflare-unit-lock",
+            issued_at: snap.ts,
+            expires_at: snap.ts + 180,
+          }));
+          tuya = await setTuyaRelayAndConfirm(env, false);
+          unitState = recordUnitLockOffConfirmed(unitState);
+          await setState(env, "tuya_status", JSON.stringify(tuya));
+          await setState(env, "relay_state", "0");
+          await setState(env, "relay_last_known", "0");
+          await setState(env, "relay_command_pending", "");
+          await logEvent(env, "unit_lock", "Units Lock: WAPDA confirmed OFF",
+            "Tuya read-back confirms the breaker is open. It cannot be closed by this dashboard or auto-shift until the 08:00 release.");
+        } catch (error: any) {
+          console.error("unit-lock relay-off failed:", error?.message);
+          if (firstAttempt) {
+            await logEvent(env, "alert", "Units Lock could not confirm WAPDA OFF",
+              "The controller will keep retrying with relay-safe backoff until Tuya confirms the breaker is open.");
+          }
+        }
+      } else if (tuya && !tuya.relay_on) {
+        unitState = recordUnitLockOffConfirmed(unitState);
+      }
+    }
+
+    await setState(env, "unit_lock_state", JSON.stringify(unitState));
+
+    // A unit-lock OFF command may have changed the physical state. Rebuild the
+    // grid signals before any auto-shift decision or live-status write.
+    gridSignals = {
+      relayOn: !!tuya?.relay_on,
+      tuyaOnline: tuya?.online ?? null,
+      semsGridPower: snap.grid_power,
+      tuyaGridPower: tuya?.grid_power ?? null,
+      tuyaGridVoltage: tuya?.grid_voltage ?? null,
+    };
+    mainsAvailable = isMainsAvailable(gridSignals);
+    gridConnected = isGridConnected(gridSignals);
+
     const localHour = new Date((snap.ts + 5 * 3600) * 1000).getUTCHours();
     const inNightWindow = isPakistanNightWindow(snap.ts);
     const pvNow = snap.solar_power ?? 0;
 
-    if (tuya) {
+    if (tuya && !unitPlan.enforce_off) {
       const previousState = asState;
       const planInput = {
         nowTs: snap.ts,
@@ -302,6 +426,20 @@ export async function runSocTick(env: any) {
     }
 
     const charging = bp > 20;
+    const wapdaPowerW = tuya?.grid_power ?? (
+      tuya?.grid_voltage != null && tuya?.grid_current != null
+        ? tuya.grid_voltage * tuya.grid_current
+        : null
+    );
+    const tuyaOnlySignals: GridSignals = {
+      relayOn: !!tuya?.relay_on,
+      tuyaOnline: tuya?.online ?? null,
+      tuyaGridPower: tuya?.grid_power ?? null,
+      tuyaGridVoltage: tuya?.grid_voltage ?? null,
+    };
+    const wapdaAvailable = tuya ? isMainsAvailable(tuyaOnlySignals) : false;
+    const wapdaActive = tuya ? isGridConnected(tuyaOnlySignals) : false;
+    const unitLockEnforced = isUnitLockEnforced(unitState, snap.ts);
     const status = {
       // battery
       battery_soc: Math.round(out.blended ?? 0),
@@ -322,7 +460,18 @@ export async function runSocTick(env: any) {
       load_power: Math.round(snap.load_power || 0),
       load_voltage: r2(snap.load_voltage ?? snap.output_voltage),
       load_current: r2(snap.load_current),
-      // grid
+      // Explicitly separate inverter output/load telemetry from WAPDA. The
+      // WAPDA fields below are Tuya-only and never fall back to SEMS.
+      inverter_power: Math.round(snap.load_power || 0),
+      inverter_voltage: r2(snap.output_voltage ?? snap.load_voltage),
+      inverter_current: r2(snap.load_current),
+      wapda_available: wapdaAvailable,
+      wapda_active: wapdaActive,
+      wapda_power: r2(wapdaPowerW),
+      wapda_voltage: r2(tuya?.grid_voltage),
+      wapda_current: r2(tuya?.grid_current),
+      wapda_source: "tuya",
+      // Legacy grid aliases retained for API compatibility.
       grid_power: Math.round(snap.grid_power || 0),
       grid_voltage: r2(tuya?.grid_voltage),
       mains_available: mainsAvailable,
@@ -341,6 +490,21 @@ export async function runSocTick(env: any) {
       // breaker
       breaker_online: tuya ? tuya.online : null,
       breaker_energy_kwh: tuya ? tuya.energy_total_kwh : null,
+      // Fixed Tuya-based Units Lock: 17:00-06:00, enforced until 08:00.
+      unit_lock_limit_kwh: UNIT_LOCK_LIMIT_KWH,
+      unit_lock_warning_kwh: UNIT_LOCK_WARNING_KWH,
+      unit_lock_used_kwh: r2(unitState.used_kwh),
+      unit_lock_remaining_kwh: r2(Math.max(0, UNIT_LOCK_LIMIT_KWH - unitState.used_kwh)),
+      unit_lock_locked: unitLockEnforced,
+      unit_lock_phase: unitLockEnforced
+        ? (snap.ts < (unitState.window_end_ts ?? 0) ? "locked" : "release_hold")
+        : unitPlan.phase,
+      unit_lock_window_start: unitState.window_start_ts ? new Date(unitState.window_start_ts * 1000).toISOString() : null,
+      unit_lock_window_end: unitState.window_end_ts ? new Date(unitState.window_end_ts * 1000).toISOString() : null,
+      unit_lock_unlock_at: unitState.unlock_ts ? new Date(unitState.unlock_ts * 1000).toISOString() : null,
+      unit_lock_tracking_since: unitState.initialized_at_ts ? new Date(unitState.initialized_at_ts * 1000).toISOString() : null,
+      unit_lock_restore_autoshift: unitState.restore_autoshift_on_unlock,
+      unit_lock_source: "tuya_meter_with_tuya_power_fallback",
       // autoshift status (for the settings card)
       autoshift_phase: asState.phase,
       autoshift_active: asState.phase !== "idle",

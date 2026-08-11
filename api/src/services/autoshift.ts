@@ -46,7 +46,8 @@ export type AutoshiftStopReason =
   | "window_ended"
   | "pv_recovered"
   | "duration_complete"
-  | "external_override";
+  | "external_override"
+  | "unit_limit";
 
 export interface AutoshiftConfig {
   enabled: boolean;
@@ -233,6 +234,7 @@ export function normalizeAutoshiftState(value: any): AutoshiftState {
     "pv_recovered",
     "duration_complete",
     "external_override",
+    "unit_limit",
   ];
   const stop_reason: AutoshiftStopReason | null = validReasons.includes(raw.stop_reason) ? raw.stop_reason : null;
   const attempts = Number(raw.command_attempts);

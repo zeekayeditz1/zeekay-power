@@ -250,6 +250,20 @@
   @media(max-width:520px){.settings-grid{grid-template-columns:1fr}}
   .as-status{font-size:12.5px;color:var(--muted);margin:2px 0 14px}
   .as-status b{color:var(--accent)}
+  .wapda-state{font-size:22px!important;letter-spacing:-.01em!important;white-space:nowrap}
+  .unit-lock-main{display:flex;align-items:baseline;gap:8px;margin:16px 0 4px}
+  .unit-lock-main .used{font-size:38px;font-weight:750;color:var(--accent);line-height:1}
+  .unit-lock-main .limit{font-size:14px;color:var(--muted)}
+  .unit-lock-card.warning{border-color:rgba(255,181,71,.5)}
+  .unit-lock-card.warning .used{color:var(--amber)}
+  .unit-lock-card.locked{border-color:rgba(255,88,108,.62);box-shadow:inset 0 0 34px rgba(255,88,108,.06)}
+  .unit-lock-card.locked .used{color:var(--red)}
+  .unit-lock-card .bar > i{background:linear-gradient(90deg,#39b8ff,#37f5b5)}
+  .unit-lock-card.warning .bar > i{background:linear-gradient(90deg,#ffb547,#ff8b55)}
+  .unit-lock-card.locked .bar > i{background:linear-gradient(90deg,#ff586c,#ff856e)}
+  .unit-lock-badge{font-size:11px;font-weight:700;letter-spacing:.06em;padding:5px 9px;border-radius:999px;border:1px solid var(--stroke);color:var(--muted)}
+  .unit-lock-card.warning .unit-lock-badge{color:var(--amber);border-color:rgba(255,181,71,.45)}
+  .unit-lock-card.locked .unit-lock-badge{color:var(--red);border-color:rgba(255,88,108,.5)}
   /* billing-cycle list */
   .cycles-list{display:grid;gap:10px;margin-top:6px}
   .cycle-row{display:flex;justify-content:space-between;align-items:center;gap:10px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:12px;padding:11px 14px;flex-wrap:wrap}
@@ -357,8 +371,8 @@
 
     <div class="card big-card">
       <div class="bc-head"><h3>WAPDA · Grid</h3><div class="icon i-grid">🔌</div></div>
-      <div class="bc-main"><span class="big" id="kGrid">--</span></div>
-      <div class="sub" id="kGridSub">mains status</div>
+      <div class="bc-main"><span class="big wapda-state" id="kGrid">--</span></div>
+      <div class="sub" id="kGridSub">Tuya mains status</div>
     </div>
 
     <div class="card span-full">
@@ -370,13 +384,17 @@
     </div>
 
     <div class="tiles span-full">
-      <div class="tile"><div class="tk">Grid power</div><div class="tv mono"><span id="tGrid">--</span> <small>W</small></div></div>
+      <div class="tile"><div class="tk">WAPDA power (Tuya)</div><div class="tv mono"><span id="tWapdaPower">--</span> <small>W</small></div></div>
+      <div class="tile"><div class="tk">WAPDA voltage (Tuya)</div><div class="tv mono"><span id="tWapdaVolts">--</span> <small>V</small></div></div>
+      <div class="tile"><div class="tk">WAPDA current (Tuya)</div><div class="tv mono"><span id="tWapdaCurrent">--</span> <small>A</small></div></div>
+      <div class="tile"><div class="tk">Inverter output power</div><div class="tv mono"><span id="tInverterPower">--</span> <small>W</small></div></div>
+      <div class="tile"><div class="tk">Inverter output voltage</div><div class="tv mono"><span id="tInverterVolts">--</span> <small>V</small></div></div>
+      <div class="tile"><div class="tk">Inverter output current</div><div class="tv mono"><span id="tInverterCurrent">--</span> <small>A</small></div></div>
       <div class="tile"><div class="tk">Frequency</div><div class="tv mono"><span id="tFreq">--</span> <small>Hz</small></div></div>
-      <div class="tile"><div class="tk">WAPDA today</div><div class="tv mono"><span id="tWapdaToday">--</span> <small>kWh</small></div></div>
-      <div class="tile"><div class="tk">Meter total (lifetime)</div><div class="tv mono"><span id="tMeter">--</span> <small>kWh</small></div></div>
+      <div class="tile"><div class="tk">WAPDA today (inverter counter)</div><div class="tv mono"><span id="tWapdaToday">--</span> <small>kWh</small></div></div>
+      <div class="tile"><div class="tk">WAPDA meter total (Tuya)</div><div class="tv mono"><span id="tMeter">--</span> <small>kWh</small></div></div>
       <div class="tile"><div class="tk">PV today</div><div class="tv mono"><span id="tPvToday">--</span> <small>kWh</small></div></div>
       <div class="tile"><div class="tk">PV peak today</div><div class="tv mono"><span id="tPvPeak">--</span> <small>W</small></div></div>
-      <div class="tile"><div class="tk">Voltage · Current</div><div class="tv mono" id="tVI">-- / --</div></div>
     </div>
 
     <div class="span-full grid-2">
@@ -456,7 +474,21 @@
       <button class="ghost-btn" id="asSaveBtn">Save auto-shift settings</button>
     </div>
 
-    <div class="card">
+    <div class="card unit-lock-card" id="unitLockCard">
+      <div class="cd-head"><span class="cd-title">Units Lock</span><span class="unit-lock-badge" id="ulBadge">LOADING</span></div>
+      <div class="cycles-note" style="margin-top:4px">Fixed Tuya safety limit: tracks WAPDA energy from 5 PM to 6 AM. At 6.00 units, WAPDA is forced OFF and auto-shift stays disabled until 8 AM.</div>
+      <div class="unit-lock-main"><span class="used mono" id="ulUsed">--</span><span class="limit">/ <b id="ulLimit">6.00</b> kWh used</span></div>
+      <div class="bar"><i id="ulBar" style="width:0%"></i></div>
+      <div class="tiles" style="margin-top:14px">
+        <div class="tile"><div class="tk">Remaining</div><div class="tv mono"><span id="ulRemaining">--</span> <small>kWh</small></div></div>
+        <div class="tile"><div class="tk">Tracking window</div><div class="tv" style="font-size:15px">5 PM &ndash; 6 AM</div></div>
+        <div class="tile"><div class="tk">Warning</div><div class="tv" style="font-size:15px">at 5.00 kWh</div></div>
+        <div class="tile"><div class="tk">Locked until</div><div class="tv" style="font-size:15px" id="ulUnlock">&mdash;</div></div>
+      </div>
+      <div class="as-status" id="ulStatus" style="margin-top:14px">Waiting for the next Tuya sample...</div>
+    </div>
+
+    <div class="card span-full">
       <div class="cd-head"><span class="cd-title">WAPDA usage — billing cycle</span><span class="cd-sub">resets on the 22nd of every month</span></div>
       <div class="cycles-list" id="cyclesList"><div class="cycles-note">Loading…</div></div>
       <div class="cycles-note">History builds forward from the day this dashboard went live — earlier months have no data to show yet.</div>
@@ -614,25 +646,35 @@
     $("kLoad").textContent = fmt(s.load_power,0);
     const bp = s.battery_power||0;
     $("kLoadSub").textContent = bp>20?("battery charging "+fmt(bp,0)+" W"):bp<-20?("battery discharging "+fmt(-bp,0)+" W"):"battery idle";
-    $("kGrid").textContent = s.wapda?"ON":"OFF";
-    $("kGrid").className = "big "+(s.wapda?"ok":"bad");
-    $("kGridSub").textContent = (s.wapda?"mains available":s.data_available===false?"telemetry unavailable":"running on battery")+" · relay "+(s.relay_closed?"closed":"open");
+    const wapdaAvailable = !!s.wapda_available;
+    const wapdaActive = !!s.wapda_active;
+    $("kGrid").textContent = wapdaAvailable ? (wapdaActive?"AVAILABLE · ACTIVE":"AVAILABLE · OFF") : "UNAVAILABLE · OFF";
+    $("kGrid").className = "big wapda-state "+(wapdaActive?"ok":wapdaAvailable?"hot":"bad");
+    $("kGridSub").textContent = fmt(s.wapda_voltage,1)+" V · "+fmt(s.wapda_power,0)+" W · Tuya WAPDA meter";
     $("socNow").textContent = fmt(soc,0);
-    if($("tGrid")) $("tGrid").textContent = fmt(s.grid_power,0);
+    if($("tWapdaPower")) $("tWapdaPower").textContent = fmt(s.wapda_power,0);
+    if($("tWapdaVolts")) $("tWapdaVolts").textContent = fmt(s.wapda_voltage,1);
+    if($("tWapdaCurrent")) $("tWapdaCurrent").textContent = fmt(s.wapda_current,2);
+    if($("tInverterPower")) $("tInverterPower").textContent = fmt(s.inverter_power,0);
+    if($("tInverterVolts")) $("tInverterVolts").textContent = fmt(s.inverter_voltage,1);
+    if($("tInverterCurrent")) $("tInverterCurrent").textContent = fmt(s.inverter_current,2);
     if($("tFreq")) $("tFreq").textContent = fmt(s.frequency,1);
     if($("tWapdaToday")) $("tWapdaToday").textContent = fmt(s.wapda_today_kwh,2);
-    if($("tMeter")) $("tMeter").textContent = fmt(s.meter_total_kwh,1);
+    if($("tMeter")) $("tMeter").textContent = fmt(s.breaker_energy_kwh,2);
     if($("tPvToday")) $("tPvToday").textContent = fmt(s.pv_today_kwh,2);
     if($("tPvPeak")) $("tPvPeak").textContent = fmt(s.solar_peak_today,0);
-    if($("tVI")) $("tVI").textContent = fmt(s.voltage,1)+" V / "+fmt(s.current,1)+" A";
     const on = !!s.relay_state;
     const tg = $("relayToggle");
-    tg.classList.toggle("on", on); tg.classList.remove("busy");
+    tg.classList.toggle("on", on);
+    tg.classList.toggle("busy", !!s.unit_lock_locked);
     tg.setAttribute("aria-checked", on?"true":"false");
+    tg.title = s.unit_lock_locked ? "Units Lock is active; WAPDA must stay OFF until 8 AM" : "Switch WAPDA relay";
     $("relayState").textContent = on?"ON":"OFF";
     $("relayMode").textContent = s.mode||"auto";
     $("relayUpd").textContent = ago(s.updated_at);
-    statusWord($("sgWapda"), s.wapda, ["Available","Down"]);
+    const wapdaStatusEl = $("sgWapda");
+    wapdaStatusEl.textContent = wapdaAvailable ? (wapdaActive?"Available · Active":"Available · Off") : "Unavailable · Off";
+    wapdaStatusEl.className = "sgv "+(wapdaActive?"ok":wapdaAvailable?"hot":"bad");
     statusWord($("sgRelay"), on, ["Closed","Open"]);
     statusWord($("sgSolar"), (s.solar_power||0)>5, ["Generating","Idle"]);
     const bel=$("sgBatt");
@@ -644,6 +686,38 @@
     const cs=s.charge_from_solar_kwh||0, cw=s.charge_from_wapda_kwh||0, ct=cs+cw;
     if($("cdBarSolar")) $("cdBarSolar").style.width = (ct>0?(cs/ct*100):100)+"%";
     if($("cdBarWapda")) $("cdBarWapda").style.width = (ct>0?(cw/ct*100):0)+"%";
+
+    const ulCard=$("unitLockCard"), ulUsed=Number(s.unit_lock_used_kwh||0), ulLimit=Number(s.unit_lock_limit_kwh||6);
+    const ulWarning=Number(s.unit_lock_warning_kwh||5), ulLocked=!!s.unit_lock_locked;
+    ulCard.classList.toggle("locked",ulLocked);
+    ulCard.classList.toggle("warning",!ulLocked && ulUsed>=ulWarning);
+    $("ulUsed").textContent=fmt(ulUsed,2);
+    $("ulLimit").textContent=fmt(ulLimit,2);
+    $("ulRemaining").textContent=fmt(Math.max(0,ulLimit-ulUsed),2);
+    $("ulBar").style.width=Math.max(0,Math.min(100,ulLimit>0?ulUsed/ulLimit*100:0))+"%";
+    $("ulUnlock").textContent=ulLocked?fmtTime(s.unit_lock_unlock_at):"Not locked";
+    let ulBadge="WAITING", ulMsg="The next Tuya units window starts at 5 PM.";
+    if(ulLocked){
+      ulBadge="LOCKED OFF";
+      ulMsg="6-unit limit reached. WAPDA is forced OFF and auto-shift cannot run, even if the battery reaches 0%, until "+fmtTime(s.unit_lock_unlock_at)+".";
+    }else if(s.unit_lock_phase==="tracking"){
+      ulBadge=ulUsed>=ulWarning?"WARNING":"TRACKING";
+      ulMsg=ulUsed>=ulWarning
+        ? "Warning: "+fmt(ulUsed,2)+" kWh used. Only "+fmt(Math.max(0,ulLimit-ulUsed),2)+" kWh remains before WAPDA locks OFF."
+        : "Tracking Tuya energy from 5 PM to 6 AM. Auto-shift continues normally while usage stays below 6.00 kWh.";
+    }else if(s.unit_lock_phase==="release_hold"){
+      ulBadge="HOLDING OFF";
+      ulMsg="The night window has ended, but the 6-unit lock remains enforced until 8 AM.";
+    }else if(ulUsed>0){
+      ulBadge="WINDOW DONE";
+      ulMsg="The last 5 PM–6 AM window used "+fmt(ulUsed,2)+" kWh and stayed below the limit, so auto-shift was not disabled.";
+    }
+    if(s.unit_lock_phase==="tracking" && s.unit_lock_tracking_since && s.unit_lock_window_start &&
+       new Date(s.unit_lock_tracking_since)-new Date(s.unit_lock_window_start)>120000){
+      ulMsg += " This first window started tracking at "+fmtTime(s.unit_lock_tracking_since)+" after deployment; following windows start exactly at 5 PM.";
+    }
+    $("ulBadge").textContent=ulBadge;
+    $("ulStatus").textContent=ulMsg;
     setConn(s.stale || s.data_available===false ? "warn" : "live");
   }
 
@@ -655,7 +729,9 @@
       const r = await api("/api/autoshift");
       if(!r || r.success===false) return;
       $("asToggle").classList.toggle("on", !!r.enabled);
+      $("asToggle").classList.toggle("busy", !!r.units_locked);
       $("asToggle").setAttribute("aria-checked", r.enabled?"true":"false");
+      $("asToggle").title = r.units_locked ? "Units Lock controls auto-shift until 8 AM" : "Enable or disable auto-shift";
       if(document.activeElement!==$("asThreshold")) $("asThreshold").value = r.threshold_v;
       if(document.activeElement!==$("asDuration")) $("asDuration").value = r.duration_min;
       if(document.activeElement!==$("asPvStop")) $("asPvStop").value = r.pv_stop_w;
@@ -666,7 +742,8 @@
       const coolNote = r.cooldown_until && new Date(r.cooldown_until) > new Date()
         ? " · next cycle can start after "+fmtTime(r.cooldown_until) : "";
       let msg;
-      if(r.stopping) msg = "Turning WAPDA OFF — waiting for physical relay confirmation; the cloud controller will retry each minute";
+      if(r.units_locked) msg = "Disabled by Units Lock — 6.00 kWh was reached, so WAPDA and auto-shift stay OFF until "+fmtTime(r.unit_lock_unlock_at)+", even if the battery becomes empty";
+      else if(r.stopping) msg = "Turning WAPDA OFF — waiting for physical relay confirmation; the cloud controller will retry each minute";
       else if(r.charging) msg = "Charging now — WAPDA confirmed present, held until "+fmtTime(r.until)+" at the latest (triggered at "+fmt(r.trigger_voltage,1)+" V) — ends sooner if PV reaches "+fmt(r.pv_stop_w,0)+" W";
       else if(r.active) msg = "Waiting for WAPDA — relay closed, battery at "+fmt(r.trigger_voltage,1)+" V, rechecking every minute for real grid power (a full "+r.duration_min+"-min charge starts the instant it's confirmed)";
       else if(r.enabled) msg = "Watching, 6 PM–6 AM only — closes WAPDA relay if battery drops to "+fmt(r.threshold_v,1)+" V, waits for real grid before charging, ends early once PV hits "+fmt(r.pv_stop_w,0)+" W";
@@ -686,7 +763,7 @@
       const min_on_min = parseInt($("asMinOn").value,10);
       const cooldown_min = parseInt($("asCooldown").value,10);
       const r = await api("/api/autoshift",{method:"POST",body:JSON.stringify({enabled,threshold_v,duration_min,pv_stop_w,min_on_min,cooldown_min})});
-      if(r && r.success===false) throw new Error(r.error||"save failed");
+      if(r && r.success===false) throw new Error(r.error||r.message||"save failed");
       toast("Auto-shift settings saved","ok");
       await loadAutoshift(); loadEvents();
     }catch(e){ toast(e.message||"Could not save settings","err"); }
@@ -820,6 +897,7 @@
 
   /* ---------------- events ---------------- */
   const EV_ICON = {relay:"🔗",wapda:"🔌",solar:"☀️",battery:"🔋",system:"⚙️",alert:"⚠️"};
+  EV_ICON.unit_lock="🔒";
   function renderEvents(list){
     const box=$("events");
     if(!list||!list.length){ box.innerHTML='<div class="em" style="padding:14px 4px">No recent events.</div>'; return; }
@@ -868,6 +946,7 @@
   /* ---------------- controls ---------------- */
   async function setRelay(next){
     if(relayBusy) return;
+    if(next && lastStatus && lastStatus.unit_lock_locked){ toast("Units Lock is active — WAPDA must stay OFF until 8 AM","err"); return; }
     relayBusy = true;
     const tg=$("relayToggle");
     tg.classList.add("busy");
@@ -878,7 +957,7 @@
     }catch(e){
       toast(e.message||"Relay command failed","err");
       if(lastStatus) render(lastStatus);
-    }finally{ tg.classList.remove("busy"); relayBusy=false; }
+    }finally{ tg.classList.toggle("busy",!!(lastStatus&&lastStatus.unit_lock_locked)); relayBusy=false; }
   }
   $("relayToggle").addEventListener("click", ()=>{
     if(!lastStatus) return;
@@ -894,8 +973,8 @@
   });
 
   $("refreshBtn").addEventListener("click", ()=>{ loadStatus(); loadHistory(); loadEvents(); loadAutoshift(); loadCycles(); loadApiKeys(); });
-  $("asToggle").addEventListener("click", ()=>{ $("asToggle").classList.toggle("on"); });
-  $("asToggle").addEventListener("keydown",(e)=>{ if(e.key===" "||e.key==="Enter"){ e.preventDefault(); $("asToggle").classList.toggle("on"); } });
+  $("asToggle").addEventListener("click", ()=>{ if($("asToggle").classList.contains("busy")){ toast("Units Lock controls auto-shift until 8 AM","err"); return; } $("asToggle").classList.toggle("on"); });
+  $("asToggle").addEventListener("keydown",(e)=>{ if(e.key===" "||e.key==="Enter"){ e.preventDefault(); if($("asToggle").classList.contains("busy")){ toast("Units Lock controls auto-shift until 8 AM","err"); return; } $("asToggle").classList.toggle("on"); } });
   $("asSaveBtn").addEventListener("click", saveAutoshift);
   $("akCreateBtn").addEventListener("click", createApiKeyUI);
   $("akCopyBtn").addEventListener("click", async ()=>{
