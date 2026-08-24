@@ -350,6 +350,7 @@
   .native-only{display:none!important}
   html.native-app .native-only{display:block!important}
   html.native-app .native-only.view-active{display:block!important}
+  html.native-passwordless #logoutBtn,html.native-passwordless #apiKeyCard{display:none!important}
   .notify-settings{display:grid;gap:0;margin-top:6px}
   .pref-row{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:14px 2px;border-bottom:1px solid var(--stroke)}
   .pref-row:last-child{border-bottom:0}
@@ -608,7 +609,7 @@
       <div class="cycles-note">History builds forward from the day this dashboard went live — earlier months have no data to show yet.</div>
     </div>
 
-    <div class="card span-full view-item" data-view="control">
+    <div class="card span-full view-item" data-view="control" id="apiKeyCard">
       <div class="cd-head"><span class="cd-title">API keys</span><span class="cd-sub">programmatic access to this dashboard's API \u2014 for scripts, the WapdaWatch app, or your own tools</span></div>
 
       <div class="settings-grid" style="align-items:end">
@@ -681,6 +682,8 @@
   let relayBusy = false;
   let statusBusy = false;
   let currentView = "overview";
+  let nativePasswordless = false;
+  let bootBusy = false;
 
   /* ---------------- native Android bridge ---------------- */
   function nativePost(type, payload){
@@ -705,6 +708,18 @@
   function applyNativeState(state){
     if(!state) return;
     document.documentElement.classList.add("native-app");
+    const nativeToken=typeof state.app_token==="string"?state.app_token:"";
+    if(nativeToken){
+      nativePasswordless=true;
+      document.documentElement.classList.add("native-passwordless");
+      if(token!==nativeToken){
+        token=nativeToken;
+        try{localStorage.removeItem(TOKEN_KEY);}catch(e){}
+        syncNativeSession();
+        showApp();
+        if(!statusTimer)boot();
+      }
+    }
     const enabled=!!state.notifications_enabled;
     $("notifyDot").className="dot "+(enabled?"live":"warn");
     $("notifyState").textContent=enabled?"Notifications are enabled":"Notifications are off for ZeeKay Power";
@@ -757,10 +772,14 @@
   function handleLogout(silent){
     token=null;
     try{ localStorage.removeItem(TOKEN_KEY); }catch(e){}
-    nativePost("logout");
     if(statusTimer){ clearInterval(statusTimer); statusTimer=null; }
     if(activityTimer){ clearInterval(activityTimer); activityTimer=null; }
     if(slowTimer){ clearInterval(slowTimer); slowTimer=null; }
+    if(nativePasswordless){
+      showApp();setConn("connecting");nativePost("get_state");
+      return;
+    }
+    nativePost("logout");
     showLogin();
     if(!silent) toast("Signed out","ok");
   }
@@ -1027,6 +1046,7 @@
     });
   }
   async function loadApiKeys(){
+    if(nativePasswordless) return;
     try{ const r = await api("/api/keys"); renderApiKeys((r&&r.keys)||[]); }
     catch(e){ /* keep whatever was last shown */ }
   }
@@ -1154,20 +1174,24 @@
   }
 
   async function boot(){
-    setConn("connecting");
-    skeleton();
-    await Promise.all([loadStatus(), loadHistory(), loadEvents(), loadAutoshift(), loadCycles(), loadApiKeys()]);
-    if(statusTimer) clearInterval(statusTimer);
-    if(activityTimer) clearInterval(activityTimer);
-    if(slowTimer) clearInterval(slowTimer);
-    // The cloud controller itself still samples hardware every minute. The
-    // page polls only as often as the data changes to stay gentle on the
-    // Cloudflare free plan, while manual actions refresh immediately.
-    statusTimer = setInterval(()=>{ if(shouldPoll()) loadStatus(); }, 30000);
-    activityTimer = setInterval(()=>{ if(shouldPoll()) { loadEvents(); loadAutoshift(); } }, 60000);
-    slowTimer = setInterval(()=>{ if(shouldPoll()) { loadHistory(); loadCycles(); } }, 300000);
-    syncNativeSession();
-    nativePost("get_state");
+    if(bootBusy) return;
+    bootBusy=true;
+    try{
+      setConn("connecting");
+      skeleton();
+      await Promise.all([loadStatus(), loadHistory(), loadEvents(), loadAutoshift(), loadCycles(), loadApiKeys()]);
+      if(statusTimer) clearInterval(statusTimer);
+      if(activityTimer) clearInterval(activityTimer);
+      if(slowTimer) clearInterval(slowTimer);
+      // The cloud controller itself still samples hardware every minute. The
+      // page polls only as often as the data changes to stay gentle on the
+      // Cloudflare free plan, while manual actions refresh immediately.
+      statusTimer = setInterval(()=>{ if(shouldPoll()) loadStatus(); }, 30000);
+      activityTimer = setInterval(()=>{ if(shouldPoll()) { loadEvents(); loadAutoshift(); } }, 60000);
+      slowTimer = setInterval(()=>{ if(shouldPoll()) { loadHistory(); loadCycles(); } }, 300000);
+      syncNativeSession();
+      nativePost("get_state");
+    }finally{bootBusy=false;}
   }
 
   /* ---------------- controls ---------------- */

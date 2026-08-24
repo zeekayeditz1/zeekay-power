@@ -59,6 +59,9 @@ final class NativeBridge {
                     .put("notifications_enabled", NotificationHelper.notificationsEnabled(activity))
                     .put("background_interval_minutes", 15)
                     .put("preferences", PreferenceStore.toJson(activity));
+            if (!BuildConfig.APP_API_TOKEN.isBlank()) {
+                state.put("app_token", BuildConfig.APP_API_TOKEN);
+            }
             activity.sendNativeEvent(state);
         } catch (Exception ignored) {
             // The page may be navigating; it will request state again after load.

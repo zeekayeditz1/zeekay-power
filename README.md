@@ -20,6 +20,10 @@ Notification options include:
 Android schedules background status checks every 15 minutes, the minimum reliable interval
 supported by WorkManager. The dashboard itself continues to refresh live while the app is open.
 
+Personal passwordless APK builds receive a dedicated full-access device token through the
+`ZEEKAY_APP_TOKEN` build environment. The plaintext token is never committed; Cloudflare stores
+only its SHA-256 hash. The public website continues to require the normal account login.
+
 ## Units Lock accuracy and override
 
 Units Lock can be switched on or off independently from auto-shift. Turning it off immediately

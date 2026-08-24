@@ -2,6 +2,10 @@ plugins {
     id("com.android.application")
 }
 
+// Injected only while producing the user's personal passwordless APK. The
+// plaintext device credential must never be committed to this repository.
+val zeekayAppToken = providers.environmentVariable("ZEEKAY_APP_TOKEN").orElse("").get()
+
 android {
     namespace = "com.zeekayeditz.power"
     compileSdk = 36
@@ -10,8 +14,9 @@ android {
         applicationId = "com.zeekayeditz.power"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "1.1.1"
+        versionCode = 4
+        versionName = "1.2.0"
+        buildConfigField("String", "APP_API_TOKEN", "\"$zeekayAppToken\"")
     }
 
     buildTypes {

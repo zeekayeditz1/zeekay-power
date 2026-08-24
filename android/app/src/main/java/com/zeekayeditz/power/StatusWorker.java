@@ -37,6 +37,9 @@ public final class StatusWorker extends Worker {
     public Result doWork() {
         Context context = getApplicationContext();
         String token = SecureSessionStore.load(context);
+        if ((token == null || token.isBlank()) && !BuildConfig.APP_API_TOKEN.isBlank()) {
+            token = BuildConfig.APP_API_TOKEN;
+        }
         if (token == null || token.isBlank()) return Result.success();
 
         HttpURLConnection connection = null;
