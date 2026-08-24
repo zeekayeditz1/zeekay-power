@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ZeeKay Power</string>
+    <string name="offline_title">Dashboard unavailable</string>
+    <string name="offline_message">Check your internet connection and try again. Your cloud automation continues running even while this screen is offline.</string>
+    <string name="retry">Try again</string>
+    <string name="notification_channel_alerts">Power alerts</string>
+    <string name="notification_channel_alerts_description">Important battery, WAPDA, relay and automation changes</string>
+    <string name="notification_channel_status">Dashboard status</string>
+    <string name="notification_channel_status_description">Connectivity and sign-in status for background updates</string>
+</resources>

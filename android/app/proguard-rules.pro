@@ -1,0 +1,2 @@
+-keep class androidx.work.WorkerParameters { *; }
+-keep class com.zeekayeditz.power.StatusWorker { public <init>(...); }

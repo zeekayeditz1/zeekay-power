@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="zk_background">#05070C</color>
+    <color name="zk_accent">#37F5B5</color>
+    <color name="zk_text">#EAF0FB</color>
+    <color name="zk_muted">#8794AD</color>
+    <color name="zk_button_text">#04110C</color>
+</resources>

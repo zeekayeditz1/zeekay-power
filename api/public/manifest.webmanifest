@@ -1,0 +1,22 @@
+{
+  "name": "ZeeKay Power",
+  "short_name": "ZK Power",
+  "description": "Live battery, solar, load and WAPDA monitoring and control.",
+  "id": "/",
+  "start_url": "/?source=app",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#05070c",
+  "theme_color": "#05070c",
+  "categories": ["utilities", "productivity"],
+  "icons": [
+    {"src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    {"src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ],
+  "shortcuts": [
+    {"name": "Power overview", "short_name": "Overview", "url": "/?view=overview"},
+    {"name": "WAPDA controls", "short_name": "Controls", "url": "/?view=control"}
+  ]
+}

@@ -1,0 +1,16 @@
+# Android build outputs and machine-local SDK settings
+android/.gradle/
+android/.idea/
+android/local.properties
+android/**/build/
+android/*.iml
+android/.cxx/
+android/captures/
+
+# Signing material must never be committed
+android/*.jks
+android/*.keystore
+android/keystore.properties
+
+# Packaged deliverables are attached separately from source
+dist/

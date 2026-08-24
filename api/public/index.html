@@ -2,9 +2,17 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
 <meta name="theme-color" content="#05070c" />
+<meta name="color-scheme" content="dark" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="ZeeKay Power" />
+<meta name="description" content="Live battery, solar, load and WAPDA control for ZeeKay Power." />
 <title>Zeekay Power</title>
+<link rel="manifest" href="/manifest.webmanifest" />
+<link rel="apple-touch-icon" href="/icons/icon-192.png" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E" />
 <style>
   :root{
@@ -310,6 +318,74 @@
   .cd-legend b{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:middle}
   .dot-solar{background:#f6b73c}
   .dot-wapda{background:#8b7cf6}
+
+  /* ---------- APP NAVIGATION + NATIVE EXPERIENCE ---------- */
+  .app-nav{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:0 0 18px;padding:6px;border:1px solid var(--stroke);border-radius:16px;background:rgba(10,14,22,.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}
+  .app-nav button{min-height:48px;border-radius:12px;color:var(--muted);font-size:12px;font-weight:650;display:flex;align-items:center;justify-content:center;gap:8px;transition:.18s ease}
+  .app-nav button .nav-icon{font-size:17px;line-height:1}
+  .app-nav button.active{color:#04110c;background:linear-gradient(180deg,#4dffc4,#22d59b);box-shadow:0 10px 24px -14px rgba(55,245,181,.8)}
+  .view-item{display:none!important}
+  .view-item.view-active{display:block!important}
+  .view-item.grid-2.view-active,.view-item.tiles.view-active{display:grid!important}
+  .view-heading{grid-column:1/-1;padding:7px 2px 2px}
+  .view-heading h2{font-size:23px;letter-spacing:-.02em;margin-bottom:5px}
+  .view-heading p{color:var(--muted);font-size:12.5px;line-height:1.55}
+  .sync-strip{grid-column:1/-1;display:flex;align-items:center;gap:10px;padding:11px 14px;border-radius:13px;border:1px solid rgba(55,245,181,.2);background:rgba(55,245,181,.055);font-size:12px;color:var(--muted)}
+  .sync-strip b{color:var(--txt);font-weight:650}
+  .sync-strip .sync-dot{width:8px;height:8px;flex:none;border-radius:50%;background:var(--accent);box-shadow:0 0 14px rgba(55,245,181,.8)}
+  .native-only{display:none!important}
+  html.native-app .native-only{display:block!important}
+  html.native-app .native-only.view-active{display:block!important}
+  .notify-settings{display:grid;gap:0;margin-top:6px}
+  .pref-row{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:14px 2px;border-bottom:1px solid var(--stroke)}
+  .pref-row:last-child{border-bottom:0}
+  .pref-row .pk{display:block;font-size:13.5px;font-weight:650}
+  .pref-row .pd{display:block;font-size:11.5px;color:var(--muted);line-height:1.45;margin-top:3px}
+  .pref-check{width:21px;height:21px;accent-color:var(--accent);flex:none}
+  .native-state{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin:0 0 12px}
+  .native-state .dot{flex:none}
+  .offline-banner{display:none;position:fixed;left:50%;top:calc(14px + env(safe-area-inset-top));transform:translateX(-50%);z-index:80;background:#241a0c;color:#ffd59a;border:1px solid rgba(255,181,71,.45);border-radius:999px;padding:8px 14px;font-size:12px;box-shadow:var(--shadow);white-space:nowrap}
+  body.is-offline .offline-banner{display:block}
+  .topbar .mobile-title{display:none}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+
+  @media(max-width:680px){
+    body{padding-bottom:calc(86px + env(safe-area-inset-bottom))}
+    #app{padding:calc(10px + env(safe-area-inset-top)) 12px 24px}
+    .topbar{top:8px;margin-bottom:14px;padding:10px 11px;border-radius:15px;gap:9px}
+    .topbar .logo{width:35px;height:35px}
+    .topbar .title{display:none}
+    .topbar .mobile-title{display:block;font-size:13px;font-weight:750;letter-spacing:.06em;white-space:nowrap}
+    .topbar .status-pill{padding:7px 9px}
+    .topbar #refreshBtn{font-size:0;padding:9px 11px}
+    .topbar #refreshBtn::before{content:"↻";font-size:18px}
+    .topbar #logoutBtn{display:none}
+    .app-nav{position:fixed;left:10px;right:10px;bottom:calc(8px + env(safe-area-inset-bottom));z-index:70;margin:0;padding:5px;box-shadow:0 16px 50px rgba(0,0,0,.75)}
+    .app-nav button{min-height:53px;flex-direction:column;gap:3px;font-size:10px}
+    .app-nav button .nav-icon{font-size:18px}
+    .stack{grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}
+    .stack .span-full,.view-heading,.sync-strip{grid-column:1/-1}
+    .card{padding:15px;border-radius:17px}
+    .big-card{min-height:145px}
+    .big-card .bc-main{gap:5px;flex-wrap:wrap}
+    .kpi .big,.big-card .bc-main .big{font-size:29px}
+    .big-card .bc-head h3{font-size:10.5px}
+    .big-card .bc-head .icon{width:31px;height:31px;top:13px;right:13px}
+    .wapda-state{font-size:16px!important;line-height:1.25;white-space:normal}
+    .tiles{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+    .tile{padding:11px;min-width:0}
+    .tile .tv{font-size:17px;word-break:break-word}
+    .status-grid{gap:8px}
+    .sg{padding:10px;gap:8px}
+    .sg .sgi{width:31px;height:31px}
+    .sg .sgv{font-size:13px}
+    .chart-head{align-items:flex-start;gap:8px}
+    .seg button{padding:6px 9px}
+    .toast{left:12px;right:12px;bottom:calc(82px + env(safe-area-inset-bottom));transform:translateY(20px);text-align:center;justify-content:center}
+    .toast.show{transform:translateY(0)}
+    .login-card{padding:34px 24px 28px}
+    .view-heading h2{font-size:21px}
+  }
 </style>
 </head>
 <body>
@@ -343,39 +419,49 @@
   <div class="topbar">
     <div class="logo">⚡</div>
     <div class="title">ZEEKAY POWER<small>CONTROL CENTER</small></div>
+    <div class="mobile-title">ZEEKAY POWER</div>
     <div class="spacer"></div>
     <span class="status-pill"><span class="dot" id="connDot"></span><span id="connTxt">connecting…</span></span>
     <button class="icon-btn" id="refreshBtn" title="Refresh now">↻ Refresh</button>
     <button class="icon-btn" id="logoutBtn" title="Sign out">Sign out</button>
   </div>
 
+  <nav class="app-nav" id="appNav" aria-label="Dashboard sections">
+    <button class="active" data-view="overview"><span class="nav-icon">⌂</span><span>Overview</span></button>
+    <button data-view="energy"><span class="nav-icon">↗</span><span>Energy</span></button>
+    <button data-view="control"><span class="nav-icon">⚙</span><span>Control</span></button>
+    <button data-view="activity"><span class="nav-icon">●</span><span>Activity</span></button>
+  </nav>
+
   <div class="stack">
-    <div class="card big-card">
+    <div class="view-heading view-item view-active" data-view="overview"><h2>Live power overview</h2><p>Your home energy flow, refreshed automatically from the cloud controller.</p></div>
+    <div class="sync-strip view-item view-active" data-view="overview"><span class="sync-dot"></span><span id="syncSummary"><b>Connecting</b> · waiting for the first hardware sample</span></div>
+    <div class="card big-card view-item view-active" data-view="overview">
       <div class="bc-head"><h3>Battery</h3><div class="icon i-batt">🔋</div></div>
       <div class="bc-main"><span class="big mono" id="kBatt">--</span><span class="unit">%</span><span class="chip" id="battLabel">—</span></div>
       <div class="bar"><i id="battBar" style="width:0%"></i></div>
       <div class="sub" id="kBattSub">inverter: — · — V</div>
     </div>
 
-    <div class="card big-card">
+    <div class="card big-card view-item view-active" data-view="overview">
       <div class="bc-head"><h3>Solar</h3><div class="icon i-solar">☀️</div></div>
       <div class="bc-main"><span class="big mono" id="kSolar">--</span><span class="unit">W</span></div>
       <div class="sub" id="kSolarSub">peak — W · today — kWh</div>
     </div>
 
-    <div class="card big-card">
+    <div class="card big-card view-item view-active" data-view="overview">
       <div class="bc-head"><h3>Load</h3><div class="icon i-load">🏠</div></div>
       <div class="bc-main"><span class="big mono" id="kLoad">--</span><span class="unit">W</span></div>
       <div class="sub" id="kLoadSub">—</div>
     </div>
 
-    <div class="card big-card">
+    <div class="card big-card view-item view-active" data-view="overview">
       <div class="bc-head"><h3>WAPDA · Grid</h3><div class="icon i-grid">🔌</div></div>
       <div class="bc-main"><span class="big wapda-state" id="kGrid">--</span></div>
       <div class="sub" id="kGridSub">Tuya mains status</div>
     </div>
 
-    <div class="card span-full">
+    <div class="card span-full view-item view-active" data-view="overview">
       <div class="chart-head">
         <div><h3 style="margin-bottom:6px">State of charge</h3><div class="now"><span class="mono" id="socNow">--</span><small>% now</small></div></div>
         <div class="seg" id="rangeSeg"><button data-h="6">6h</button><button data-h="12">12h</button><button data-h="24" class="active">24h</button></div>
@@ -383,7 +469,7 @@
       <canvas id="socChart" height="220"></canvas>
     </div>
 
-    <div class="tiles span-full">
+    <div class="tiles span-full view-item view-active" data-view="overview">
       <div class="tile"><div class="tk">WAPDA power (Tuya)</div><div class="tv mono"><span id="tWapdaPower">--</span> <small>W</small></div></div>
       <div class="tile"><div class="tk">WAPDA voltage (Tuya)</div><div class="tv mono"><span id="tWapdaVolts">--</span> <small>V</small></div></div>
       <div class="tile"><div class="tk">WAPDA current (Tuya)</div><div class="tv mono"><span id="tWapdaCurrent">--</span> <small>A</small></div></div>
@@ -397,7 +483,7 @@
       <div class="tile"><div class="tk">PV peak today</div><div class="tv mono"><span id="tPvPeak">--</span> <small>W</small></div></div>
     </div>
 
-    <div class="span-full grid-2">
+    <div class="span-full grid-2 view-item view-active" data-view="overview">
     <div class="card">
       <h3>System status</h3>
       <div class="status-grid">
@@ -423,7 +509,8 @@
     </div>
     </div>
 
-    <div class="card span-full">
+    <div class="view-heading view-item" data-view="energy"><h2>Energy &amp; history</h2><p>See how the battery charged, discharged, and how much WAPDA energy was used.</p></div>
+    <div class="card span-full view-item" data-view="energy">
       <div class="cd-head"><span class="cd-title">Charge &amp; Discharge</span><span class="cd-sub">today · cloud-metered from battery V×A</span></div>
       <div class="cd-sec">
         <div class="cd-row"><span>Charging</span><span class="faint">energy into the bank</span></div>
@@ -441,7 +528,8 @@
       </div>
     </div>
 
-    <div class="span-full grid-2">
+    <div class="view-heading view-item" data-view="control"><h2>Automation &amp; control</h2><p>Manage WAPDA safely. Cloud automation keeps working even while the app is closed.</p></div>
+    <div class="span-full grid-2 view-item" data-view="control">
     <div class="card">
       <div class="cd-head"><span class="cd-title">Auto-shift to WAPDA</span><span class="cd-sub">nighttime only (6 PM\u20136 AM) \u00b7 voltage-triggered</span></div>
       <div class="relay-row">
@@ -494,15 +582,15 @@
       </div>
       <div class="as-status" id="ulStatus" style="margin-top:14px">Waiting for the next Tuya sample...</div>
     </div>
+    </div>
 
-    <div class="card span-full">
+    <div class="card span-full view-item" data-view="energy">
       <div class="cd-head"><span class="cd-title">WAPDA usage — billing cycle</span><span class="cd-sub">resets on the 22nd of every month</span></div>
       <div class="cycles-list" id="cyclesList"><div class="cycles-note">Loading…</div></div>
       <div class="cycles-note">History builds forward from the day this dashboard went live — earlier months have no data to show yet.</div>
     </div>
-    </div>
 
-    <div class="card span-full">
+    <div class="card span-full view-item" data-view="control">
       <div class="cd-head"><span class="cd-title">API keys</span><span class="cd-sub">programmatic access to this dashboard's API \u2014 for scripts, the WapdaWatch app, or your own tools</span></div>
 
       <div class="settings-grid" style="align-items:end">
@@ -533,7 +621,22 @@
       <div class="ak-list" id="akList"><div class="cycles-note">Loading\u2026</div></div>
     </div>
 
-    <div class="card span-full">
+    <div class="view-heading view-item" data-view="activity"><h2>Activity &amp; alerts</h2><p>Review recent system decisions and choose which Android notifications you receive.</p></div>
+
+    <div class="card span-full native-only view-item" data-view="activity" id="nativeAlertsCard">
+      <div class="cd-head"><span class="cd-title">Android notifications</span><span class="cd-sub">secure background checks every 15 minutes</span></div>
+      <div class="native-state"><span class="dot" id="notifyDot"></span><span id="notifyState">Checking notification permission…</span></div>
+      <button class="ghost-btn" id="notifyPermissionBtn">Enable Android notifications</button>
+      <div class="notify-settings">
+        <label class="pref-row"><span><span class="pk">WAPDA availability</span><span class="pd">Alert when grid power becomes available or unavailable.</span></span><input class="pref-check" type="checkbox" id="prefGrid" checked></label>
+        <label class="pref-row"><span><span class="pk">Relay &amp; automation</span><span class="pd">Alert for relay changes, auto-shift charging, and Units Lock.</span></span><input class="pref-check" type="checkbox" id="prefAutomation" checked></label>
+        <label class="pref-row"><span><span class="pk">Low battery</span><span class="pd">Alert once when the battery crosses the selected threshold.</span></span><input class="pref-check" type="checkbox" id="prefBattery" checked></label>
+        <div class="settings-grid" style="margin-bottom:2px"><div><label for="prefBatteryLevel">Low-battery threshold (%)</label><input type="number" id="prefBatteryLevel" min="10" max="50" step="5" value="25"></div></div>
+      </div>
+      <button class="ghost-btn" id="notifySaveBtn">Save notification preferences</button>
+    </div>
+
+    <div class="card span-full view-item" data-view="activity">
       <h3>Recent events</h3>
       <div class="events" id="events"></div>
     </div>
@@ -541,6 +644,7 @@
 </main>
 
 <div class="toast" id="toast"></div>
+<div class="offline-banner" id="offlineBanner">Offline · showing the last available screen</div>
 
 <script>
 "use strict";
@@ -558,6 +662,43 @@
   let lastStatus = null;
   let relayBusy = false;
   let statusBusy = false;
+  let currentView = "overview";
+
+  /* ---------------- native Android bridge ---------------- */
+  function nativePost(type, payload){
+    try{
+      if(window.ZeekayNative && typeof window.ZeekayNative.postMessage==="function"){
+        window.ZeekayNative.postMessage(JSON.stringify(Object.assign({type:type},payload||{})));
+        return true;
+      }
+    }catch(e){}
+    return false;
+  }
+  function syncNativeSession(){ if(token) nativePost("session",{token:token}); }
+  function sendNativeStatus(s){
+    nativePost("status",{status:{
+      battery_soc:s.battery_soc,battery_voltage:s.battery_voltage,
+      wapda_available:!!s.wapda_available,wapda_active:!!s.wapda_active,
+      relay_state:!!s.relay_state,unit_lock_locked:!!s.unit_lock_locked,
+      autoshift_charging:!!s.autoshift_charging,autoshift_stop_reason:s.autoshift_stop_reason||null,
+      stale:!!s.stale,data_available:s.data_available!==false,updated_at:s.updated_at||null
+    }});
+  }
+  function applyNativeState(state){
+    if(!state) return;
+    document.documentElement.classList.add("native-app");
+    const enabled=!!state.notifications_enabled;
+    $("notifyDot").className="dot "+(enabled?"live":"warn");
+    $("notifyState").textContent=enabled?"Notifications are enabled":"Notifications are off for ZeeKay Power";
+    $("notifyPermissionBtn").textContent=enabled?"Notification permission enabled":"Enable Android notifications";
+    const p=state.preferences||{};
+    if(typeof p.grid==="boolean") $("prefGrid").checked=p.grid;
+    if(typeof p.automation==="boolean") $("prefAutomation").checked=p.automation;
+    if(typeof p.battery==="boolean") $("prefBattery").checked=p.battery;
+    if(Number.isFinite(Number(p.battery_level))) $("prefBatteryLevel").value=String(p.battery_level);
+  }
+  window.addEventListener("zeekay:native",(e)=>applyNativeState(e.detail||{}));
+  if(/ZeekayPowerAndroid/i.test(navigator.userAgent)) document.documentElement.classList.add("native-app");
 
   /* ---------------- helpers ---------------- */
   function toast(msg, kind){
@@ -598,6 +739,7 @@
   function handleLogout(silent){
     token=null;
     try{ localStorage.removeItem(TOKEN_KEY); }catch(e){}
+    nativePost("logout");
     if(statusTimer){ clearInterval(statusTimer); statusTimer=null; }
     if(activityTimer){ clearInterval(activityTimer); activityTimer=null; }
     if(slowTimer){ clearInterval(slowTimer); slowTimer=null; }
@@ -620,6 +762,7 @@
       if(!r.ok || !data.token){ throw new Error(data.message||data.error||"Invalid email or password"); }
       token = data.token;
       try{ localStorage.setItem(TOKEN_KEY, token); }catch(e){}
+      syncNativeSession();
       showApp(); boot();
       toast("Welcome back"+(data.user&&data.user.name?", "+data.user.name.split(" ")[0]:""),"ok");
     }catch(err){
@@ -645,6 +788,8 @@
   }
   function render(s){
     lastStatus = s;
+    const syncText=s.data_available===false?"No hardware sample available":s.stale?"Data is delayed · last sample "+ago(s.updated_at):"Live hardware sample · updated "+ago(s.updated_at);
+    $("syncSummary").innerHTML="<b>"+(s.stale||s.data_available===false?"Attention":"All systems reporting")+"</b> · "+escapeHtml(syncText);
     const soc = s.battery_soc!=null && Number.isFinite(Number(s.battery_soc)) ? Number(s.battery_soc) : null;
     $("kBatt").textContent = fmt(soc,0);
     $("battBar").style.width = (soc==null?0:Math.max(0,Math.min(100,soc)))+"%";
@@ -730,6 +875,7 @@
     $("ulBadge").textContent=ulBadge;
     $("ulStatus").textContent=ulMsg;
     setConn(s.stale || s.data_available===false ? "warn" : "live");
+    sendNativeStatus(s);
   }
 
   /* ---------------- editable Units Lock limit ---------------- */
@@ -978,6 +1124,8 @@
     statusTimer = setInterval(()=>{ if(shouldPoll()) loadStatus(); }, 30000);
     activityTimer = setInterval(()=>{ if(shouldPoll()) { loadEvents(); loadAutoshift(); } }, 60000);
     slowTimer = setInterval(()=>{ if(shouldPoll()) { loadHistory(); loadCycles(); } }, 300000);
+    syncNativeSession();
+    nativePost("get_state");
   }
 
   /* ---------------- controls ---------------- */
@@ -1010,6 +1158,16 @@
   });
 
   $("refreshBtn").addEventListener("click", ()=>{ loadStatus(); loadHistory(); loadEvents(); loadAutoshift(); loadCycles(); loadApiKeys(); });
+  $("appNav").addEventListener("click",(e)=>{
+    const btn=e.target.closest("button[data-view]"); if(!btn) return;
+    currentView=btn.dataset.view;
+    $("appNav").querySelectorAll("button").forEach(b=>b.classList.toggle("active",b===btn));
+    document.querySelectorAll(".view-item").forEach(el=>el.classList.toggle("view-active",el.dataset.view===currentView));
+    window.scrollTo({top:0,behavior:"smooth"});
+    if(currentView==="energy"){loadHistory();loadCycles();}
+    if(currentView==="control"){loadAutoshift();loadApiKeys();}
+    if(currentView==="activity"){loadEvents();nativePost("get_state");}
+  });
   document.addEventListener("visibilitychange",()=>{
     if(shouldPoll()) { loadStatus(); loadEvents(); loadAutoshift(); }
   });
@@ -1023,6 +1181,12 @@
     try{ await navigator.clipboard.writeText(v); toast("Copied","ok"); }
     catch(e){ toast("Copy failed — select and copy manually","err"); }
   });
+  $("notifyPermissionBtn").addEventListener("click",()=>nativePost("request_notifications"));
+  $("notifySaveBtn").addEventListener("click",()=>{
+    const batteryLevel=Math.max(10,Math.min(50,Number($("prefBatteryLevel").value)||25));
+    nativePost("save_preferences",{preferences:{grid:$("prefGrid").checked,automation:$("prefAutomation").checked,battery:$("prefBattery").checked,battery_level:batteryLevel}});
+    toast("Notification preferences saved","ok");
+  });
 
   $("rangeSeg").addEventListener("click",(e)=>{
     const btn=e.target.closest("button"); if(!btn) return;
@@ -1033,7 +1197,15 @@
   let rz; window.addEventListener("resize", ()=>{ clearTimeout(rz); rz=setTimeout(loadHistory,150); });
 
   /* ---------------- init ---------------- */
-  if(token){ showApp(); boot(); } else { showLogin(); }
+  window.addEventListener("online",()=>{document.body.classList.remove("is-offline");if(token)loadStatus();});
+  window.addEventListener("offline",()=>document.body.classList.add("is-offline"));
+  document.body.classList.toggle("is-offline",!navigator.onLine);
+  if("serviceWorker" in navigator&&location.protocol==="https:")navigator.serviceWorker.register("/sw.js").catch(()=>{});
+  const requestedView=new URLSearchParams(location.search).get("view");
+  if(["overview","energy","control","activity"].includes(requestedView))document.querySelector('#appNav button[data-view="'+requestedView+'"]').click();
+  const localPreview=(location.hostname==="127.0.0.1"||location.hostname==="localhost")&&new URLSearchParams(location.search).has("preview");
+  if(localPreview){showApp();setConn("live");}
+  else if(token){ showApp(); boot(); } else { showLogin(); }
 })();
 </script>
 </body>
