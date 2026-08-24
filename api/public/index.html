@@ -96,6 +96,10 @@
     box-shadow:0 0 0 3px rgba(55,245,181,.14);
     background:rgba(255,255,255,0.06);
   }
+  .password-wrap{position:relative}
+  .password-wrap input{padding-right:68px}
+  .password-toggle{position:absolute;right:7px;top:50%;transform:translateY(-50%);border:0;background:transparent;color:var(--accent-2);font-size:12px;font-weight:700;padding:8px;cursor:pointer;border-radius:7px}
+  .password-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
   .btn{
     width:100%;padding:14px;border-radius:13px;font-size:15px;font-weight:600;letter-spacing:.02em;
     color:#04110c;background:linear-gradient(180deg,#4dffc4,#22d59b);
@@ -416,11 +420,14 @@
     </div>
     <div class="field">
       <label for="password">Password</label>
-      <input id="password" name="password" type="password" autocomplete="current-password" placeholder="••••••••" required />
+      <div class="password-wrap">
+        <input id="password" name="password" type="password" autocomplete="current-password" autocapitalize="none" spellcheck="false" placeholder="••••••••" required />
+        <button class="password-toggle" id="passwordToggle" type="button" aria-label="Show password" aria-pressed="false">Show</button>
+      </div>
     </div>
     <button class="btn" id="loginBtn" type="submit"><span>Sign in</span></button>
     <div class="login-msg" id="loginMsg"></div>
-    <div class="login-foot">Secured · power.zeekayeditz.com</div>
+    <div class="login-foot">Same account as power.zeekayeditz.com · password is case-sensitive</div>
   </form>
 </section>
 
@@ -758,6 +765,15 @@
     if(!silent) toast("Signed out","ok");
   }
 
+  $("passwordToggle").addEventListener("click",()=>{
+    const password=$("password"), showing=password.type==="text";
+    password.type=showing?"password":"text";
+    $("passwordToggle").textContent=showing?"Show":"Hide";
+    $("passwordToggle").setAttribute("aria-label",showing?"Show password":"Hide password");
+    $("passwordToggle").setAttribute("aria-pressed",showing?"false":"true");
+    password.focus();
+  });
+
   $("loginForm").addEventListener("submit", async (e)=>{
     e.preventDefault();
     const btn=$("loginBtn"), msg=$("loginMsg");
@@ -770,7 +786,10 @@
         body:JSON.stringify({email,password})
       });
       const data = await r.json().catch(()=>({}));
-      if(!r.ok || !data.token){ throw new Error(data.message||data.error||"Invalid email or password"); }
+      if(!r.ok || !data.token){
+        if(r.status===401) throw new Error("Email or password did not match. Tap Show and check uppercase letters and symbols.");
+        throw new Error(data.message||data.error||"Login failed");
+      }
       token = data.token;
       try{ localStorage.setItem(TOKEN_KEY, token); }catch(e){}
       syncNativeSession();

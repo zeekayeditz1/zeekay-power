@@ -101,7 +101,7 @@ public final class MainActivity extends ComponentActivity {
         settings.setMediaPlaybackRequiresUserGesture(true);
         settings.setBuiltInZoomControls(false);
         settings.setDisplayZoomControls(false);
-        settings.setUserAgentString(settings.getUserAgentString() + " ZeekayPowerAndroid/1.0.0");
+        settings.setUserAgentString(settings.getUserAgentString() + " ZeekayPowerAndroid/" + BuildConfig.VERSION_NAME);
         webView.setFilterTouchesWhenObscured(true);
         webView.setBackgroundColor(Color.rgb(5, 7, 12));
 

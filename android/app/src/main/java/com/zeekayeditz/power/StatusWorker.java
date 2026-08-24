@@ -48,7 +48,7 @@ public final class StatusWorker extends Worker {
             connection.setInstanceFollowRedirects(false);
             connection.setRequestProperty("Accept", "application/json");
             connection.setRequestProperty("Authorization", "Bearer " + token);
-            connection.setRequestProperty("User-Agent", "ZeekayPowerAndroid/1.0.0 BackgroundWorker");
+            connection.setRequestProperty("User-Agent", "ZeekayPowerAndroid/" + BuildConfig.VERSION_NAME + " BackgroundWorker");
 
             int code = connection.getResponseCode();
             if (code == 401) {
