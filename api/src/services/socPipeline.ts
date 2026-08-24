@@ -214,7 +214,7 @@ export async function runSocTick(env: any) {
       asState = normalizeAutoshiftState(raw ? JSON.parse(raw) : null);
     } catch {}
 
-    // --- WAPDA units lock (Tuya only; 17:00-06:00, editable hard limit) ---
+    // --- WAPDA units lock (Tuya cumulative meter only; no power integration or SEMS) ---
     let unitConfig: UnitLockConfig = normalizeUnitLockConfig(null);
     try {
       const raw = await getState(env, "unit_lock_cfg", "");
@@ -228,16 +228,13 @@ export async function runSocTick(env: any) {
       unitState = normalizeUnitLockState(raw ? JSON.parse(raw) : null);
     } catch {}
 
-    // A last-known cumulative meter is safe to use as a baseline while Tuya
-    // is temporarily unreachable. Power is never carried forward: integrating
-    // a stale watt reading would fabricate consumption during an outage.
+    // A last-known cumulative Tuya meter is safe as a stationary baseline while
+    // the device is temporarily unreachable. No instantaneous power or SEMS
+    // counter is accepted by this controller.
     const unitMeterSource = tuya ?? previousTuya;
     const unitPlan = planUnitLock(unitState, {
       nowTs: snap.ts,
       energyTotalKwh: unitMeterSource?.energy_total_kwh ?? null,
-      powerW: tuya?.grid_power ?? null,
-      voltageV: tuya?.grid_voltage ?? null,
-      currentA: tuya?.grid_current ?? null,
     }, unitConfig);
     unitState = unitPlan.state;
 
@@ -444,7 +441,7 @@ export async function runSocTick(env: any) {
     };
     const wapdaAvailable = tuya ? isMainsAvailable(tuyaOnlySignals) : false;
     const wapdaActive = tuya ? isGridConnected(tuyaOnlySignals) : false;
-    const unitLockEnforced = isUnitLockEnforced(unitState, snap.ts);
+    const unitLockEnforced = isUnitLockEnforced(unitState, snap.ts, unitConfig.enabled);
     const status = {
       // battery
       battery_soc: Math.round(out.blended ?? 0),
@@ -495,7 +492,8 @@ export async function runSocTick(env: any) {
       // breaker
       breaker_online: tuya ? tuya.online : null,
       breaker_energy_kwh: tuya ? tuya.energy_total_kwh : null,
-      // Tuya-based Units Lock: 17:00-06:00, enforced until 08:00.
+      // Tuya cumulative-meter Units Lock: 17:00-06:00, enforced until 08:00.
+      unit_lock_enabled: unitConfig.enabled,
       unit_lock_limit_kwh: unitConfig.limit_kwh,
       unit_lock_warning_kwh: unitWarningKwh,
       unit_lock_used_kwh: r2(unitState.used_kwh),
@@ -509,7 +507,7 @@ export async function runSocTick(env: any) {
       unit_lock_unlock_at: unitState.unlock_ts ? new Date(unitState.unlock_ts * 1000).toISOString() : null,
       unit_lock_tracking_since: unitState.initialized_at_ts ? new Date(unitState.initialized_at_ts * 1000).toISOString() : null,
       unit_lock_restore_autoshift: unitState.restore_autoshift_on_unlock,
-      unit_lock_source: "tuya_meter_with_tuya_power_fallback",
+      unit_lock_source: "tuya_forward_energy_total_only",
       // autoshift status (for the settings card)
       autoshift_phase: asState.phase,
       autoshift_active: asState.phase !== "idle",

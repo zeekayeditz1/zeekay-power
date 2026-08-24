@@ -20,6 +20,17 @@ Notification options include:
 Android schedules background status checks every 15 minutes, the minimum reliable interval
 supported by WorkManager. The dashboard itself continues to refresh live while the app is open.
 
+## Units Lock accuracy and override
+
+Units Lock can be switched on or off independently from auto-shift. Turning it off immediately
+stops tracking and breaker enforcement, clears the active Units Lock session, and allows manual
+WAPDA control. Turning it back on starts a fresh baseline from the current Tuya meter reading.
+
+The nightly units calculation accepts exactly one source: the Tuya breaker's cumulative
+`forward_energy_total` value. It does not use SEMS, inverter daily counters, instantaneous power,
+or voltage × current estimates. This prevents battery/inverter output from being miscounted as
+WAPDA units.
+
 ### Build
 
 Install JDK 17 and Android SDK Platform 36, then set `JAVA_HOME` and `ANDROID_HOME` locally.

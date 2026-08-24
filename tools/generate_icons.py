@@ -3,6 +3,22 @@ from PIL import Image, ImageDraw, ImageFilter
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SOURCE = ROOT / "branding" / "zeekay-logo-mark-source.png"
+
+
+def load_mark() -> Image.Image:
+    mark = Image.open(SOURCE).convert("RGBA")
+    alpha_box = mark.getchannel("A").getbbox()
+    if not alpha_box:
+        raise ValueError(f"Logo source has no visible pixels: {SOURCE}")
+    return mark.crop(alpha_box)
+
+
+def fit_mark(canvas_size: int, width_ratio: float) -> Image.Image:
+    mark = load_mark()
+    target_width = max(1, round(canvas_size * width_ratio))
+    target_height = max(1, round(target_width * mark.height / mark.width))
+    return mark.resize((target_width, target_height), Image.Resampling.LANCZOS)
 
 
 def render_icon(size: int, maskable: bool = False) -> Image.Image:
@@ -21,36 +37,22 @@ def render_icon(size: int, maskable: bool = False) -> Image.Image:
                 int(12 + 48 * glow),
             )
 
-    draw = ImageDraw.Draw(image, "RGBA")
     inset = int(width * 0.018)
     radius = int(width * (0.22 if not maskable else 0.04))
     mask = Image.new("L", (width, width), 0)
     ImageDraw.Draw(mask).rounded_rectangle((inset, inset, width - inset, width - inset), radius=radius, fill=255)
     image.putalpha(mask)
 
-    center = width / 2
-    draw = ImageDraw.Draw(image, "RGBA")
-    draw.ellipse((center - width * .33, center - width * .33, center + width * .33, center + width * .33),
-                 fill=(55, 245, 181, 12), outline=(57, 184, 255, 55), width=max(2, width // 240))
-    draw.ellipse((center - width * .43, center - width * .43, center + width * .43, center + width * .43),
-                 outline=(55, 245, 181, 35), width=max(2, width // 300))
-
-    factor = 0.78 if maskable else 1.0
-    points = [(0.56, 0.16), (0.28, 0.56), (0.47, 0.56), (0.43, 0.84), (0.72, 0.40), (0.53, 0.40)]
-    points = [
-        (center + (px * width - center) * factor, center + (py * width - center) * factor)
-        for px, py in points
-    ]
-
+    mark = fit_mark(width, 0.66 if maskable else 0.86)
     glow_layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
-    ImageDraw.Draw(glow_layer).polygon(points, fill=(55, 245, 181, 190))
-    glow_layer = glow_layer.filter(ImageFilter.GaussianBlur(width * .035))
+    mark_x = (width - mark.width) // 2
+    mark_y = (width - mark.height) // 2
+    glow_mask = mark.getchannel("A").filter(ImageFilter.GaussianBlur(width * .022))
+    glow_color = Image.new("RGBA", mark.size, (31, 183, 220, 105))
+    glow_color.putalpha(glow_mask.point(lambda a: round(a * 0.4)))
+    glow_layer.alpha_composite(glow_color, (mark_x, mark_y + round(width * .012)))
     image.alpha_composite(glow_layer)
-
-    draw = ImageDraw.Draw(image, "RGBA")
-    draw.polygon(points, fill=(55, 245, 181, 255))
-    highlight = [(x - width * .008, y - width * .006) for x, y in points[:3]]
-    draw.line(highlight, fill=(140, 255, 222, 210), width=max(2, width // 150), joint="curve")
+    image.alpha_composite(mark, (mark_x, mark_y))
 
     image = image.resize((size, size), Image.Resampling.LANCZOS)
     background = Image.new("RGB", image.size, "#05070c")
@@ -84,6 +86,7 @@ def save_icons() -> None:
     render_icon(192).save(web_dir / "icon-192.png", optimize=True)
     render_icon(512).save(web_dir / "icon-512.png", optimize=True)
     render_icon(512, maskable=True).save(web_dir / "icon-maskable-512.png", optimize=True)
+    fit_mark(256, 0.94).save(web_dir / "zeekay-logo-mark.png", optimize=True)
 
     res_dir = ROOT / "android" / "app" / "src" / "main" / "res"
     densities = {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}
@@ -92,6 +95,16 @@ def save_icons() -> None:
         target.mkdir(parents=True, exist_ok=True)
         render_legacy_launcher(size, False).save(target / "ic_launcher.png", optimize=True)
         render_legacy_launcher(size, True).save(target / "ic_launcher_round.png", optimize=True)
+
+    drawable = res_dir / "drawable-nodpi"
+    drawable.mkdir(parents=True, exist_ok=True)
+    foreground = Image.new("RGBA", (432, 432), (0, 0, 0, 0))
+    adaptive_mark = fit_mark(432, 0.68)
+    foreground.alpha_composite(adaptive_mark, ((432 - adaptive_mark.width) // 2, (432 - adaptive_mark.height) // 2))
+    foreground.save(drawable / "ic_launcher_foreground.png", optimize=True)
+    monochrome = Image.new("RGBA", foreground.size, (255, 255, 255, 0))
+    monochrome.putalpha(foreground.getchannel("A"))
+    monochrome.save(drawable / "ic_launcher_monochrome.png", optimize=True)
 
 
 if __name__ == "__main__":

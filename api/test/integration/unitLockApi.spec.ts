@@ -30,6 +30,7 @@ describe("Units Lock API", () => {
     expect(save.status).toBe(200);
     await expect(save.json()).resolves.toMatchObject({
       success: true,
+      enabled: true,
       limit_kwh: 4.5,
       warning_kwh: 3.6,
     });
@@ -38,10 +39,39 @@ describe("Units Lock API", () => {
     expect(read.status).toBe(200);
     await expect(read.json()).resolves.toMatchObject({
       success: true,
+      enabled: true,
       limit_kwh: 4.5,
       min_kwh: 0.1,
       max_kwh: 50,
+      source: "tuya_forward_energy_total_only",
     });
+  });
+
+  it("turns Units Lock off and on independently from its saved limit", async () => {
+    const headers = await authHeaders();
+    const disable = await exports.default.fetch(new Request(`${ORIGIN}/api/unit-lock`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ enabled: false }),
+    }));
+    expect(disable.status).toBe(200);
+    await expect(disable.json()).resolves.toMatchObject({
+      success: true,
+      enabled: false,
+      locked: false,
+      source: "tuya_forward_energy_total_only",
+    });
+
+    const readDisabled = await exports.default.fetch(new Request(`${ORIGIN}/api/unit-lock`, { headers }));
+    await expect(readDisabled.json()).resolves.toMatchObject({ enabled: false, locked: false });
+
+    const enable = await exports.default.fetch(new Request(`${ORIGIN}/api/unit-lock`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ enabled: true }),
+    }));
+    expect(enable.status).toBe(200);
+    await expect(enable.json()).resolves.toMatchObject({ success: true, enabled: true });
   });
 
   it("rejects unsafe values and unauthenticated changes", async () => {
