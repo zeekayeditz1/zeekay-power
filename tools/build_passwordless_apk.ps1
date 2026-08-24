@@ -47,11 +47,38 @@ try {
 
     New-Item -ItemType Directory -Path (Split-Path -Parent $outputPath) -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $androidDir "app\build\outputs\apk\debug\app-debug.apk") -Destination $outputPath -Force
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($outputPath)
+    try {
+        $embedded = $false
+        foreach ($entry in $archive.Entries | Where-Object { $_.FullName -match '^classes\d*\.dex$' }) {
+            $stream = $entry.Open()
+            try {
+                $memory = New-Object System.IO.MemoryStream
+                try {
+                    $stream.CopyTo($memory)
+                    $dexText = [Text.Encoding]::ASCII.GetString($memory.ToArray())
+                    if ($dexText.Contains($token)) { $embedded = $true; break }
+                } finally {
+                    $memory.Dispose()
+                }
+            } finally {
+                $stream.Dispose()
+            }
+        }
+        if (-not $embedded) { throw "The device credential was not embedded in the APK" }
+    } finally {
+        $archive.Dispose()
+        $dexText = $null
+    }
+
     $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $outputPath).Hash
     $item = Get-Item -LiteralPath $outputPath
 
     [pscustomobject]@{
         passwordless_status_verified = $true
+        embedded_device_key_verified = $true
         device_key_scope = "full"
         output = $item.FullName
         bytes = $item.Length
@@ -64,4 +91,7 @@ try {
     $encoded = $null
     $tokenHash = $null
     $hashBytes = $null
+    if (Test-Path -LiteralPath $androidDir) {
+        & (Join-Path $androidDir "gradlew.bat") clean --no-daemon -p $androidDir *> $null
+    }
 }
