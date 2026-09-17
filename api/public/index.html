@@ -530,7 +530,7 @@
 
     <div class="view-heading view-item" data-view="energy"><h2>Energy &amp; history</h2><p>See how the battery charged, discharged, and how much WAPDA energy was used.</p></div>
     <div class="card span-full view-item" data-view="energy">
-      <div class="cd-head"><span class="cd-title">Charge &amp; Discharge</span><span class="cd-sub">today · cloud-metered from battery V×A</span></div>
+      <div class="cd-head"><span class="cd-title">Battery energy</span><span class="cd-sub">charging: calendar day · discharge: 5 PM–5 PM</span></div>
       <div class="cd-sec">
         <div class="cd-row"><span>Charging</span><span class="faint">energy into the bank</span></div>
         <div class="tiles cd-tiles">
@@ -543,8 +543,15 @@
       </div>
       <div class="cd-sec">
         <div class="cd-row"><span>Discharging</span><span class="faint">energy drawn from the bank</span></div>
-        <div class="tile"><div class="tk">Total discharge (today)</div><div class="tv mono"><span id="dTotal">--</span> <small>kWh</small></div></div>
+        <div class="tile"><div class="tk">Battery discharge · current 5 PM–5 PM day</div><div class="tv mono"><span id="dTotal">--</span> <small>kWh</small></div></div>
+        <div class="cycles-note" id="dWindowSummary">Only energy leaving the battery is counted.</div>
       </div>
+    </div>
+
+    <div class="card span-full view-item" data-view="energy">
+      <div class="cd-head"><span class="cd-title">Daily battery discharge history</span><span class="cd-sub">7 completed days + current day · Pakistan time</span></div>
+      <div class="cycles-list" id="dischargeList"><div class="cycles-note">Loading…</div></div>
+      <div class="cycles-note">Each day runs from 5 PM to the next 5 PM. Charging is excluded. Energy is estimated from measured battery DC power; incomplete readings are marked.</div>
     </div>
 
     <div class="view-heading view-item" data-view="control"><h2>Automation &amp; control</h2><p>Manage WAPDA safely. Cloud automation keeps working even while the app is closed.</p></div>
@@ -607,7 +614,7 @@
     <div class="card span-full view-item" data-view="energy">
       <div class="cd-head"><span class="cd-title">WAPDA usage — billing cycle</span><span class="cd-sub">resets on the 22nd of every month</span></div>
       <div class="cycles-list" id="cyclesList"><div class="cycles-note">Loading…</div></div>
-      <div class="cycles-note">History builds forward from the day this dashboard went live — earlier months have no data to show yet.</div>
+      <div class="cycles-note" id="billingQuality">WAPDA units come from the Tuya energy meter. Missing history is marked as partial.</div>
     </div>
 
     <div class="card span-full view-item" data-view="control" id="apiKeyCard">
@@ -905,6 +912,9 @@
     if($("cWapda")) $("cWapda").textContent = fmt(s.charge_from_wapda_kwh,2);
     if($("cTotal")) $("cTotal").textContent = fmt(s.total_charge_kwh,2);
     if($("dTotal")) $("dTotal").textContent = fmt(s.discharge_today_kwh,2);
+    if($("dWindowSummary")) $("dWindowSummary").textContent = s.discharge_window_start
+      ? fmtDate(s.discharge_window_start.slice(0,10))+" 5 PM → "+fmtDate(s.discharge_window_end.slice(0,10))+" 5 PM · "+fmt(s.discharge_coverage_pct,1)+"% readings covered"+(s.discharge_partial?" · incomplete record":"")
+      : "Only energy leaving the battery is counted.";
     const cs=s.charge_from_solar_kwh||0, cw=s.charge_from_wapda_kwh||0, ct=cs+cw;
     if($("cdBarSolar")) $("cdBarSolar").style.width = (ct>0?(cs/ct*100):100)+"%";
     if($("cdBarWapda")) $("cdBarWapda").style.width = (ct>0?(cw/ct*100):0)+"%";
@@ -1026,7 +1036,7 @@
   }
 
   /* ---------------- WAPDA billing-cycle history ---------------- */
-  function renderCycles(list){
+  function renderCycles(list,sync){
     const el = $("cyclesList");
     if(!list || !list.length){ el.innerHTML = '<div class="cycles-note">No completed cycles yet.</div>'; return; }
     el.innerHTML = list.map(c=>{
@@ -1034,15 +1044,18 @@
       return `<div class="cycle-row${c.is_current?' current':''}">
         <div><div class="cr-range">${range}${c.is_current?' · current cycle':''}</div></div>
         <div class="cr-vals">
-          <span>WAPDA <b>${fmt(c.wapda_kwh,2)}</b> kWh</span>
+          <span>WAPDA <b>${c.wapda_kwh==null?'Awaiting meter history':fmt(c.wapda_kwh,2)+' kWh'}</b>${c.wapda_partial?' · partial record':''}</span>
           <span>Solar <b>${fmt(c.solar_kwh,2)}</b> kWh</span>
         </div>
       </div>`;
     }).join("");
+    $("billingQuality").textContent = sync&&sync.status==="unavailable"
+      ? "Tuya past readings are unavailable. Partial totals include only recorded meter usage; earlier missing units are not estimated."
+      : "WAPDA uses Tuya energy-meter records. Past readings are being recovered; incomplete cycles are marked as partial.";
   }
   function fmtDate(d){ if(!d) return "--"; const [y,m,dd]=d.split("-"); const months=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]; return dd+" "+months[parseInt(m,10)-1]; }
   async function loadCycles(){
-    try{ const r = await api("/api/history/cycles"); renderCycles((r&&r.cycles)||[]); }
+    try{ const r = await api("/api/history/cycles"); renderCycles((r&&r.cycles)||[],r&&r.history_sync); }
     catch(e){ /* keep whatever was last shown */ }
   }
 
@@ -1189,6 +1202,17 @@
     setTimeout(()=>["kBatt","kSolar","kLoad","socNow"].forEach(id=>$(id).classList.remove("skl")),1200);
   }
 
+  async function loadDischarge(){
+    try{
+      const r=await api("/api/history/discharge?days=7");
+      $("dischargeList").innerHTML=(r.history||[]).map(day=>`<div class="cycle-row${day.is_current?' current':''}">
+        <div><div class="cr-range">${fmtDate(day.date)} 5 PM – ${fmtDate(day.window_end.slice(0,10))} 5 PM${day.is_current?' · current':''}</div>
+          <div class="cycles-note">${fmt(day.coverage_pct,1)}% readings covered${day.partial?' · incomplete record':''}</div></div>
+        <div class="cr-vals"><span>Discharged <b>${day.discharge_kwh==null?'No readings':'~'+fmt(day.discharge_kwh,2)+' kWh'}</b></span></div>
+      </div>`).join("");
+    }catch(e){ $("dischargeList").innerHTML='<div class="cycles-note">Discharge history is temporarily unavailable.</div>'; }
+  }
+
   function shouldPoll(){
     return document.visibilityState==="visible" && document.getElementById("app").style.display!=="none";
   }
@@ -1199,7 +1223,7 @@
     try{
       setConn("connecting");
       skeleton();
-      await Promise.all([loadStatus(), loadHistory(), loadEvents(), loadAutoshift(), loadCycles(), loadApiKeys()]);
+      await Promise.all([loadStatus(), loadHistory(), loadEvents(), loadAutoshift(), loadCycles(), loadDischarge(), loadApiKeys()]);
       if(statusTimer) clearInterval(statusTimer);
       if(activityTimer) clearInterval(activityTimer);
       if(slowTimer) clearInterval(slowTimer);
@@ -1208,7 +1232,7 @@
       // Cloudflare free plan, while manual actions refresh immediately.
       statusTimer = setInterval(()=>{ if(shouldPoll()) loadStatus(); }, 30000);
       activityTimer = setInterval(()=>{ if(shouldPoll()) { loadEvents(); loadAutoshift(); } }, 60000);
-      slowTimer = setInterval(()=>{ if(shouldPoll()) { loadHistory(); loadCycles(); } }, 300000);
+      slowTimer = setInterval(()=>{ if(shouldPoll()) { loadHistory(); loadCycles(); loadDischarge(); } }, 300000);
       syncNativeSession();
       nativePost("get_state");
     }finally{bootBusy=false;}
@@ -1243,14 +1267,14 @@
     finally{ b.disabled=false; b.textContent=o; }
   });
 
-  $("refreshBtn").addEventListener("click", ()=>{ loadStatus(); loadHistory(); loadEvents(); loadAutoshift(); loadCycles(); loadApiKeys(); });
+  $("refreshBtn").addEventListener("click", ()=>{ loadStatus(); loadHistory(); loadEvents(); loadAutoshift(); loadCycles(); loadDischarge(); loadApiKeys(); });
   $("appNav").addEventListener("click",(e)=>{
     const btn=e.target.closest("button[data-view]"); if(!btn) return;
     currentView=btn.dataset.view;
     $("appNav").querySelectorAll("button").forEach(b=>b.classList.toggle("active",b===btn));
     document.querySelectorAll(".view-item").forEach(el=>el.classList.toggle("view-active",el.dataset.view===currentView));
     window.scrollTo({top:0,behavior:"smooth"});
-    if(currentView==="energy"){loadHistory();loadCycles();}
+    if(currentView==="energy"){loadHistory();loadCycles();loadDischarge();}
     if(currentView==="control"){loadAutoshift();loadApiKeys();}
     if(currentView==="activity"){loadEvents();nativePost("get_state");}
   });

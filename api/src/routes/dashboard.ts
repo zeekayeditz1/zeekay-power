@@ -1,4 +1,6 @@
 import { enqueueControllerCommand, getControllerCommand, processControllerCommands, waitForControllerCommand } from "../services/controllerCommands";
+import { billingCycles, dischargeDays, wapdaEnergyDays } from "../services/energyStore";
+import { localEnergyDate } from "../services/energy";
 import { Hono } from "hono";
 import { authMiddleware, requireFullAccess } from "../middleware/auth";
 import {
@@ -87,17 +89,15 @@ async function snapshot(env: any) {
   const unitWarningKwh = unitLockWarningKwh(unitConfig.limit_kwh);
   const nowEpoch = Math.floor(Date.now() / 1000);
   const currentUnitWindow = unitLockWindow(nowEpoch);
+  const discharge=(await dischargeDays(env,nowEpoch,0))[0];
+  const wapdaDay=(await wapdaEnergyDays(env)).find((day:any)=>day.date===localEnergyDate(nowEpoch));
   const unitLockEnforced = isUnitLockEnforced(unitLock, nowEpoch, unitConfig.enabled);
   const unitLockPhase = !unitConfig.enabled
     ? "disabled"
     : unitLockEnforced
       ? (nowEpoch < (unitLock.window_end_ts ?? 0) ? "locked" : "release_hold")
       : currentUnitWindow.active ? "tracking" : "waiting";
-  const wapdaPower = tuya?.grid_power ?? (
-    tuya?.grid_voltage != null && tuya?.grid_current != null
-      ? Number(tuya.grid_voltage) * Number(tuya.grid_current)
-      : null
-  );
+  const wapdaPower = tuya?.grid_power ?? null;
   const tuyaOnlySignals: GridSignals = {
     relayOn: relayReal === 1,
     tuyaOnline: tuya?.online ?? null,
@@ -161,8 +161,9 @@ async function snapshot(env: any) {
         energy_today: s.pv_today_kwh,
         grid_power: s.grid_power,
         frequency: s.frequency,
-        wapda_today_kwh: s.wapda_today_kwh,
-        meter_total_kwh: s.meter_total_kwh,
+        wapda_today_kwh: wapdaDay?.kwh ?? null,
+        wapda_today_partial: wapdaDay ? wapdaDay.reported_kwh==null&&!!wapdaDay.partial : true,
+        meter_total_kwh: tuya?.energy_total_kwh ?? null,
         wapda: mainsAvailable,
         mains_available: mainsAvailable,
         grid_connected: gridConnected,
@@ -180,7 +181,13 @@ async function snapshot(env: any) {
         charge_from_solar_kwh: s.charge_from_solar_kwh,
         charge_from_wapda_kwh: s.charge_from_wapda_kwh,
         total_charge_kwh: s.total_charge_kwh,
-        discharge_today_kwh: s.discharge_today_kwh,
+        discharge_today_kwh: discharge.discharge_kwh,
+        discharge_calendar_day_kwh: s.discharge_calendar_day_kwh ?? null,
+        discharge_window_start: discharge.window_start,
+        discharge_window_end: discharge.window_end,
+        discharge_coverage_pct: discharge.coverage_pct,
+        discharge_partial: discharge.partial,
+        discharge_source: discharge.source,
         breaker_online: tuya?.online ?? false,
         breaker_energy_kwh: tuya?.energy_total_kwh ?? s.breaker_energy_kwh ?? null,
         unit_lock_enabled: unitConfig.enabled,
@@ -245,7 +252,7 @@ async function snapshot(env: any) {
     grid_power: null,
     grid_voltage: tuya?.grid_voltage ?? null,
     frequency: tuya?.frequency_hz ?? null,
-    meter_total_kwh: null,
+    meter_total_kwh: tuya?.energy_total_kwh ?? null,
     wapda: mainsAvailable,
     mains_available: mainsAvailable,
     grid_connected: isGridConnected({
@@ -267,8 +274,13 @@ async function snapshot(env: any) {
     charge_from_solar_kwh: null,
     charge_from_wapda_kwh: null,
     total_charge_kwh: null,
-    wapda_today_kwh: null,
-    discharge_today_kwh: null,
+    wapda_today_kwh: wapdaDay?.kwh ?? null,
+    discharge_today_kwh: discharge.discharge_kwh,
+    discharge_window_start: discharge.window_start,
+    discharge_window_end: discharge.window_end,
+    discharge_coverage_pct: discharge.coverage_pct,
+    discharge_partial: discharge.partial,
+    discharge_source: discharge.source,
     breaker_online: tuya?.online ?? null,
     breaker_energy_kwh: tuya?.energy_total_kwh ?? null,
     unit_lock_enabled: unitConfig.enabled,
@@ -619,50 +631,26 @@ dashboard.post("/autoshift", requireFullAccess, async (c) => {
   return c.json({ success: true, ...cfg, cancellation_pending: cancellationPending });
 });
 
-/* ---------- GET /api/history/cycles (WAPDA billing-cycle history, resets on the 22nd) ---------- */
-dashboard.get("/history/cycles", async (c) => {
-  const env = c.env as any;
-  function cycleStartOf(dateStr: string) {
-    const [y, m, d] = dateStr.split("-").map(Number);
-    // cycle runs 22nd of a month -> 21st of the next; day>=22 belongs to the cycle starting THIS month
-    const cy = d >= 22 ? y : (m === 1 ? y - 1 : y);
-    const cm = d >= 22 ? m : (m === 1 ? 12 : m - 1);
-    return `${cy}-${String(cm).padStart(2, "0")}-22`;
-  }
-  function cycleEndOf(cycleStart: string) {
-    const [y, m] = cycleStart.split("-").map(Number);
-    const ny = m === 12 ? y + 1 : y;
-    const nm = m === 12 ? 1 : m + 1;
-    return `${ny}-${String(nm).padStart(2, "0")}-21`;
-  }
-
+/* ---------- Battery discharge: Pakistan 17:00 through next-day 17:00 ---------- */
+dashboard.get("/history/discharge", async (c) => {
+  const days=Math.max(7,Math.min(90,parseInt(c.req.query("days")||"7",10)||7));
   try {
-    const res: any = await env.zeekay_power_db
-      .prepare(`SELECT date, wapda_import_kwh, solar_kwh, charge_kwh, discharge_kwh, pv_peak_w FROM daily_energy_log ORDER BY date ASC`)
-      .all();
-    const rows = res?.results || [];
-    const cycles: Record<string, any> = {};
-    for (const r of rows) {
-      const key = cycleStartOf(r.date);
-      if (!cycles[key]) cycles[key] = { cycle_start: key, cycle_end: cycleEndOf(key), wapda_kwh: 0, solar_kwh: 0, charge_kwh: 0, discharge_kwh: 0, days: 0 };
-      cycles[key].wapda_kwh += r.wapda_import_kwh || 0;
-      cycles[key].solar_kwh += r.solar_kwh || 0;
-      cycles[key].charge_kwh += r.charge_kwh || 0;
-      cycles[key].discharge_kwh += r.discharge_kwh || 0;
-      cycles[key].days += 1;
-    }
-    const today = localDayForCycles();
-    const currentKey = cycleStartOf(today);
-    const list = Object.values(cycles)
-      .map((x: any) => ({ ...x, wapda_kwh: r2c(x.wapda_kwh), solar_kwh: r2c(x.solar_kwh), charge_kwh: r2c(x.charge_kwh), discharge_kwh: r2c(x.discharge_kwh), is_current: x.cycle_start === currentKey }))
-      .sort((a: any, b: any) => (a.cycle_start < b.cycle_start ? 1 : -1));
-    return c.json({ success: true, cycles: list });
-  } catch (e: any) {
-    console.error("billing-cycle query failed:", e?.message);
-    return c.json({ success: false, message: "Billing history is temporarily unavailable" }, 503);
+    const history=await dischargeDays(c.env,Math.floor(Date.now()/1000),days);
+    return c.json({success:true,timezone:"Asia/Karachi",day_starts_at:"17:00",retention:"daily_records_retained",history});
+  } catch {
+    return c.json({success:false,message:"Discharge history is temporarily unavailable"},503);
   }
 });
-function r2c(x: number) { return Math.round(x * 100) / 100; }
-function localDayForCycles() { return new Date(Date.now() + 5 * 3600 * 1000).toISOString().slice(0, 10); }
+
+/* ---------- Tuya-only WAPDA billing cycles, starting on the 22nd ---------- */
+dashboard.get("/history/cycles", async (c) => {
+  try {
+    const cycles=await billingCycles(c.env,Math.floor(Date.now()/1000));
+    const sync=JSON.parse(await getState(c.env as any,"tuya_energy_sync_status","{}"));
+    return c.json({success:true,cycles,wapda_source:"tuya_only",history_sync:sync});
+  } catch {
+    return c.json({success:false,message:"Billing history is temporarily unavailable"},503);
+  }
+});
 
 export default dashboard;

@@ -18,6 +18,16 @@ export async function ensureTables(env: StoreEnv): Promise<void> {
   if (ready) return;
 
   await env.zeekay_power_db.batch([
+    env.zeekay_power_db.prepare(`CREATE TABLE IF NOT EXISTS discharge_daily_energy (
+      window_start INTEGER PRIMARY KEY,date TEXT NOT NULL,kwh REAL NOT NULL DEFAULT 0,covered_s INTEGER NOT NULL DEFAULT 0
+    )`),
+    env.zeekay_power_db.prepare(`CREATE TABLE IF NOT EXISTS wapda_meter_samples (
+      ts INTEGER PRIMARY KEY,total_kwh REAL,voltage REAL,current REAL,power REAL,online INTEGER NOT NULL
+    )`),
+    env.zeekay_power_db.prepare(`CREATE TABLE IF NOT EXISTS wapda_daily_energy (
+      date TEXT PRIMARY KEY,observed_kwh REAL NOT NULL DEFAULT 0,partial INTEGER NOT NULL DEFAULT 0,
+      first_ts INTEGER,last_ts INTEGER,reported_kwh REAL,reported_at INTEGER,reported_observed_kwh REAL NOT NULL DEFAULT 0
+    )`),
     env.zeekay_power_db.prepare(`CREATE TABLE IF NOT EXISTS controller_commands (
       id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL,
       status TEXT NOT NULL, created_ts INTEGER NOT NULL, result TEXT

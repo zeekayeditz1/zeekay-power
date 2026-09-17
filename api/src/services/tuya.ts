@@ -90,14 +90,21 @@ async function callWithTokenRetry(env: TuyaEnv, method: string, path: string, bo
   }
   return d;
 }
-// Tuya phase_a raw: [V:2B @0.1V][I:3B @0.001A][P:3B @1W]
+// Tuya breakers use 8-byte (2V/3I/3P) or 9-byte (2V/4I/3P)
+// phase_a payloads. The recorded B/YAABGZAAA1 sample is 9 bytes and
+// carries 4.505A, not 0.017A; fixed offsets shifted its power bytes too.
 function decodePhase(b64?: string) {
   if (!b64) return null;
   try {
     const bin = atob(b64); const u = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
-    if (u.length < 8) return null;
-    return { voltage: ((u[0] << 8) | u[1]) / 10, current: ((u[2] << 16) | (u[3] << 8) | u[4]) / 1000, power: (u[5] << 16) | (u[6] << 8) | u[7] };
+    if (u.length !== 8 && u.length !== 9) return null;
+    const currentEnd=u.length-3;
+    let current=0;
+    for(let i=2;i<currentEnd;i++) current=current*256+u[i];
+    let power=0;
+    for(let i=currentEnd;i<u.length;i++) power=power*256+u[i];
+    return { voltage: ((u[0] << 8) | u[1]) / 10, current: current / 1000, power };
   } catch { return null; }
 }
 
@@ -168,4 +175,25 @@ export async function setTuyaRelayAndConfirm(env: TuyaEnv, on: boolean): Promise
 }
 
 export function tuyaConfigured(env: TuyaEnv) { return !!(env.TUYA_CLIENT_ID && env.TUYA_CLIENT_SECRET && env.TUYA_DEVICE_ID); }
+/** This API explicitly returns ENERGY in kWh, not V×A apparent power and not
+ *  the sum of repeated cumulative forward_energy_total datapoints. */
+export async function fetchTuyaEnergyDay(env:TuyaEnv,date:string):Promise<number> {
+  const day=date.replaceAll("-","");
+  const query=new URLSearchParams({energy_action:"consume",statisticsType:"day",startTime:day,endTime:day,containChilds:"false",device_ids:env.TUYA_DEVICE_ID});
+  // Tuya signs query keys in ascending alphabetical order.
+  query.sort();
+  const d=await callWithTokenRetry(env,"GET",`/v1.0/iot-03/energy/electricity/device/nodes/statistics-sum?${query}`);
+  if(!d.success) throw new Error(`Tuya energy history unavailable (code ${d.code??"unknown"})`);
+  if(typeof d.result!=="number"||!Number.isFinite(d.result)||d.result<0) throw new Error("Tuya energy history returned an invalid kWh total");
+  return d.result;
+}
+
+export async function fetchTuyaEnergyCapabilities(env:TuyaEnv) {
+  const [statistics,spec]=await Promise.all([
+    callWithTokenRetry(env,"GET",`/v1.0/devices/${env.TUYA_DEVICE_ID}/all-statistic-type`),
+    callWithTokenRetry(env,"GET",`/v1.0/devices/${env.TUYA_DEVICE_ID}/specification`),
+  ]);
+  return {statistics:statistics.success?statistics.result:[],statistics_error:statistics.success?null:statistics.code,
+    datapoints:spec.success?(spec.result?.status??[]).map((dp:any)=>({code:dp.code,type:dp.type,values:dp.values})):[],spec_error:spec.success?null:spec.code};
+}
 export default { fetchTuyaStatus, setTuyaRelay, setTuyaRelayAndConfirm, tuyaConfigured };

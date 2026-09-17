@@ -88,6 +88,21 @@ by Git.
 
 ## Cloudflare app
 
+Battery discharge energy integrates only negative battery-side DC power from 5 PM
+to 5 PM Pakistan time. Charging never offsets discharge. Daily totals are persisted
+and the dashboard shows seven completed days plus the current day. Existing signed
+battery history rebuilds the first week; gaps longer than three minutes are omitted
+and incomplete coverage is shown. Charging and solar counters keep their calendar days.
+
+WAPDA billing cycles start on the 22nd and use only Tuya meter energy: confirmed-online
+cumulative counter increments plus authoritative daily energy reports when the Tuya
+project permits history access. The inverter's grid counter is no longer billed as
+WAPDA. Actual meter voltage, current and active watts are recorded independently of
+SEMS availability. Missing history is labeled incomplete, never replaced with an
+assumed total. Meter counter catch-up preserves units across polling outages; assigning
+those units across midnight gaps is approximate and marked partial. Daily ledgers are
+retained; raw Tuya samples are kept for 365 days.
+
 The Worker and static dashboard live in `api/`. The static shell includes an installable web app
 manifest, offline shell cache, mobile navigation, safe-area support, and security headers. API
 responses and credentials are never cached by the service worker.

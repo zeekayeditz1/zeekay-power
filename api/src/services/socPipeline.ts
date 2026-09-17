@@ -1,4 +1,5 @@
 import { processControllerCommands } from "./controllerCommands";
+import { recordDischargeSample, recordWapdaSample, dischargeDays } from "./energyStore";
 /*
 | SOC + energy pipeline: pull SEMS, run estimator, read Tuya breaker, persist a
 | rich live_status for /api/status, log a daily energy row (real inverter
@@ -75,6 +76,8 @@ export async function runSocTick(env: any) {
       `INSERT OR REPLACE INTO battery_history (ts,v,p,soc_blended,soc_v,soc_cc,bms_soc,anchored)
      VALUES (?,?,?,?,?,?,?,?)`
     ).bind(snap.ts, snap.v, snap.p_chg, r2(out.usable_soc), r2(out.soc_v), r2(out.soc_cc), snap.bms_soc, out.anchored ? 1 : 0).run();
+    await recordDischargeSample(env,{ts:snap.ts,p:snap.p_chg});
+    const dischargeToday=(await dischargeDays(env,snap.ts,0))[0];
 
     // --- Tuya breaker (best-effort) ---
     let tuya: TuyaStatus | null = null;
@@ -84,6 +87,7 @@ export async function runSocTick(env: any) {
       if (tuyaConfigured(env)) {
         try { const raw = await getState(env, "tuya_status", ""); if (raw) previousTuya = JSON.parse(raw); } catch {}
         tuya = await fetchTuyaStatus(env);
+        await recordWapdaSample(env,tuya,Math.floor(Date.now()/1000));
 
         // The breaker can also be switched from the Tuya app, by a schedule on
         // the device, or by mains cycling. Surface those so a state change that
@@ -174,10 +178,10 @@ export async function runSocTick(env: any) {
       `INSERT INTO daily_energy_log (date, wapda_import_kwh, solar_kwh, charge_kwh, discharge_kwh, pv_peak_w)
      VALUES (?,?,?,?,?,?)
      ON CONFLICT(date) DO UPDATE SET
-       wapda_import_kwh=excluded.wapda_import_kwh, solar_kwh=excluded.solar_kwh,
+      solar_kwh=excluded.solar_kwh,
        charge_kwh=excluded.charge_kwh, discharge_kwh=excluded.discharge_kwh,
        pv_peak_w=MAX(daily_energy_log.pv_peak_w, excluded.pv_peak_w)`
-    ).bind(today, r2(snap.wapda_today_kwh) ?? 0, r2(snap.energy_today) ?? 0, r2(realChargeKwh) ?? 0, r2(realDischargeKwh) ?? 0, Math.round(acc.pv_peak_w || 0)).run();
+    ).bind(today, 0, r2(snap.energy_today) ?? 0, r2(realChargeKwh) ?? 0, r2(realDischargeKwh) ?? 0, Math.round(acc.pv_peak_w || 0)).run();
 
     // --- once-a-day housekeeping so the free-tier D1 never fills up ---
     const lastMaintenanceDay = await getState(env, "last_maintenance_day", "");
@@ -185,6 +189,7 @@ export async function runSocTick(env: any) {
       const historyCutoff = snap.ts - 90 * 24 * 3600;
       await env.zeekay_power_db.batch([
         env.zeekay_power_db.prepare(`DELETE FROM battery_history WHERE ts < ?`).bind(historyCutoff),
+        env.zeekay_power_db.prepare(`DELETE FROM wapda_meter_samples WHERE ts < ?`).bind(snap.ts-365*24*3600),
         env.zeekay_power_db.prepare(
           `DELETE FROM app_events
          WHERE id < COALESCE(
@@ -424,11 +429,7 @@ export async function runSocTick(env: any) {
     }
 
     const charging = bp > 20;
-    const wapdaPowerW = tuya?.grid_power ?? (
-      tuya?.grid_voltage != null && tuya?.grid_current != null
-        ? tuya.grid_voltage * tuya.grid_current
-        : null
-    );
+    const wapdaPowerW = tuya?.grid_power ?? null;
     const tuyaOnlySignals: GridSignals = {
       relayOn: !!tuya?.relay_on,
       tuyaOnline: tuya?.online ?? null,
@@ -483,8 +484,8 @@ export async function runSocTick(env: any) {
       mains_available: mainsAvailable,
       grid_connected: gridConnected,
       frequency: r2((tuya && tuya.frequency_hz) || snap.frequency),
-      wapda_today_kwh: r2(snap.wapda_today_kwh),
-      meter_total_kwh: r2(snap.meter_total_kwh),
+      inverter_grid_today_kwh: r2(snap.wapda_today_kwh),
+      meter_total_kwh: r2(tuya?.energy_total_kwh),
       // Kept for API compatibility, but explicitly represents inverter output
       // voltage. It must never be used as proof that WAPDA is present.
       ac_voltage: r2(snap.output_voltage),
@@ -492,7 +493,13 @@ export async function runSocTick(env: any) {
       charge_from_solar_kwh: r2(chargeFromSolarKwh),
       charge_from_wapda_kwh: r2(chargeFromWapdaKwh),
       total_charge_kwh: r2(realChargeKwh),
-      discharge_today_kwh: r2(realDischargeKwh),
+      discharge_today_kwh: dischargeToday.discharge_kwh,
+      discharge_calendar_day_kwh: r2(realDischargeKwh),
+      discharge_window_start: dischargeToday.window_start,
+      discharge_window_end: dischargeToday.window_end,
+      discharge_coverage_pct: dischargeToday.coverage_pct,
+      discharge_partial: dischargeToday.partial,
+      discharge_source: "battery_dc_discharge_only",
       // breaker
       breaker_online: tuya ? tuya.online : null,
       breaker_energy_kwh: tuya ? tuya.energy_total_kwh : null,

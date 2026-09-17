@@ -6,6 +6,7 @@ import dashboardRoutes from "./routes/dashboard";
 import apiKeyRoutes from "./routes/apiKeys";
 import { authMiddleware } from "./middleware/auth";
 import { runSocTick } from "./services/socPipeline";
+import { runWapdaEnergyTick, syncTuyaEnergyHistory } from "./services/energyStore";
 
 export interface Env {
   zeekay_power_db: D1Database;
@@ -148,7 +149,11 @@ export default {
     ctx.waitUntil(
       (async () => {
         try { await runSocTick(env as any); }
-        catch (e: any) { console.error("soc tick error:", e?.message); }
+        catch (e: any) {
+          console.error("soc tick error:", e?.message);
+          try { await runWapdaEnergyTick(env); } catch { console.error("Independent WAPDA metering failed"); }
+        }
+        try { await syncTuyaEnergyHistory(env); } catch { console.error("Tuya energy history sync failed"); }
       })()
     );
   },

@@ -104,6 +104,22 @@ CREATE TABLE IF NOT EXISTS daily_energy_log (
     charge_kwh REAL, discharge_kwh REAL, pv_peak_w REAL
 );
 
+-- Battery-side discharge only, Pakistan 17:00 to next-day 17:00.
+CREATE TABLE IF NOT EXISTS discharge_daily_energy (
+    window_start INTEGER PRIMARY KEY, date TEXT NOT NULL,
+    kwh REAL NOT NULL DEFAULT 0, covered_s INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS wapda_meter_samples (
+    ts INTEGER PRIMARY KEY, total_kwh REAL, voltage REAL, current REAL,
+    power REAL, online INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS wapda_daily_energy (
+    date TEXT PRIMARY KEY, observed_kwh REAL NOT NULL DEFAULT 0,
+    partial INTEGER NOT NULL DEFAULT 0, first_ts INTEGER, last_ts INTEGER,
+    reported_kwh REAL, reported_at INTEGER,
+    reported_observed_kwh REAL NOT NULL DEFAULT 0
+);
+
 -- ==========================
 -- API KEYS (programmatic access, separate from the browser JWT login)
 -- ==========================
