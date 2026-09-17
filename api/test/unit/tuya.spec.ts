@@ -19,10 +19,10 @@ const ENV: any = {
   TUYA_REGION: "eu",
 };
 
-function mockStatus(dps: Record<string, any>) {
-  vi.stubGlobal("fetch", vi.fn(async () =>
+function mockStatus(dps: Record<string, any>, online=true) {
+  vi.stubGlobal("fetch", vi.fn(async (url: string) =>
     new Response(
-      JSON.stringify({ success: true, result: Object.entries(dps).map(([code, value]) => ({ code, value })) }),
+      JSON.stringify({ success: true, result: url.endsWith("/status") ? Object.entries(dps).map(([code, value]) => ({ code, value })) : { online } }),
       { status: 200, headers: { "Content-Type": "application/json" } }
     )
   ));
@@ -55,9 +55,18 @@ describe("fetchTuyaStatus relay state", () => {
   });
 
   it("rejects a malformed status payload instead of guessing", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      new Response(JSON.stringify({ success: true, result: null }), { status: 200 })
+    vi.stubGlobal("fetch", vi.fn(async (url: string) =>
+      new Response(JSON.stringify({ success: true, result: url.endsWith("/status") ? null : { online:true } }), { status: 200 })
     ));
     await expect(fetchTuyaStatus(ENV)).rejects.toThrow(/invalid result/);
+  });
+
+  it("discards cached voltage and power when the device is offline", async () => {
+    mockStatus({ switch: true, phase_a: "B/YAABGZAAA1", supply_frequency:500 },false);
+    const s=await fetchTuyaStatus(ENV);
+    expect(s.online).toBe(false);
+    expect(s.grid_voltage).toBeNull();
+    expect(s.grid_power).toBeNull();
+    expect(s.frequency_hz).toBeNull();
   });
 });

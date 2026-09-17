@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE = "zk-power-shell-v4";
+const CACHE = "zk-power-shell-v5";
 const SHELL = ["/", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png", "/icons/zeekay-logo-mark.png"];
 
 self.addEventListener("install", (event) => {

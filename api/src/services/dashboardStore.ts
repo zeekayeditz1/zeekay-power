@@ -18,6 +18,10 @@ export async function ensureTables(env: StoreEnv): Promise<void> {
   if (ready) return;
 
   await env.zeekay_power_db.batch([
+    env.zeekay_power_db.prepare(`CREATE TABLE IF NOT EXISTS controller_commands (
+      id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL,
+      status TEXT NOT NULL, created_ts INTEGER NOT NULL, result TEXT
+    )`),
     env.zeekay_power_db.prepare(
       `CREATE TABLE IF NOT EXISTS app_state (
         key TEXT PRIMARY KEY,

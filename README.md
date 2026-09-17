@@ -30,10 +30,45 @@ Units Lock can be switched on or off independently from auto-shift. Turning it o
 stops tracking and breaker enforcement, clears the active Units Lock session, and allows manual
 WAPDA control. Turning it back on starts a fresh baseline from the current Tuya meter reading.
 
+Manual Units Lock and relay requests are now persisted in a controller queue. If a poll or
+relay operation is in progress, the API returns HTTP 202 with a `command_id`; the dashboard
+waits for `/api/commands/:id` to report completion. The cron also drains the queue before
+contacting SEMS and after releasing its controller lock. Unstarted commands expire after
+three minutes. Interrupted relay commands are never replayed automatically. A manual ON
+still requires Units Lock to be disabled and an online Tuya relay read-back to confirm ON.
+Manual commands end an active auto-shift cycle, releasing its scheduled stop.
+
 The nightly units calculation accepts exactly one source: the Tuya breaker's cumulative
 `forward_energy_total` value. It does not use SEMS, inverter daily counters, instantaneous power,
 or voltage × current estimates. This prevents battery/inverter output from being miscounted as
 WAPDA units.
+
+## WAPDA availability and battery estimates
+
+WAPDA voltage, current and power come only from the mains-side Tuya breaker. Each poll
+also checks the device metadata's `online` flag, because Tuya's status endpoint can return
+cached readings during a mains outage. Offline, failed or older-than-three-minute readings
+are hidden; the panel says the meter is offline and availability is unverified. An online
+meter with no mains voltage reports unavailable. Inverter output voltage is never mains
+evidence. This assumes the Tuya meter senses the upstream WAPDA supply; software cannot
+distinguish battery-fed voltage if the sensor is physically connected downstream instead.
+
+The dashboard's calculated percentage is estimated usable reserve above the selected 45V
+cutoff, not inverter SOC. The raw inverter `bms_soc` is unchanged. The internal chemical SOC
+estimate still uses a 48V **140Ah** series bank, measured battery-side charging/discharging
+power, charge efficiency, bounded resistance learning, and true-rest voltage anchors.
+Rate-dependent discharge uses an assumed Peukert exponent of 1.12. Charging voltage alone
+does not refill SOC; duplicate timestamps and gaps do not accumulate fictitious Ah, and a
+cutoff voltage rebound does not restore usable reserve until measured charging occurs.
+
+Backup time uses the owner's recorded 48.5V→45V night (520 minutes), with points at 47.7V
+(340 minutes left), 47.3V (275), and 46.5V (135). The sharp lower knee is retained instead
+of extrapolating the early slope. Runtime scales with a smoothed battery-side DC draw and
+is capped by estimated remaining Ah. The reference 318.25W is a single observed sample,
+not a measured overnight average, so runtime is explicitly low-confidence/approximate.
+48.5V is not treated as full charge and 58Ah is not treated as the bank's total capacity.
+Historic chart points retain their original meaning; new points use reserve to 45V.
+These changes do not modify inverter cutoff, charging current, or charging voltage.
 
 ### Build
 

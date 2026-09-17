@@ -20,6 +20,7 @@ export const DEFAULTS = {
   rest_current_a:1.5, rest_min_s:1800,
   ri_bounds:[0.010,0.080] as [number,number],
   cap_bounds:[80,160] as [number,number],
+  peukert_exponent:1.12, cutoff_v:45,
 };
 const clamp=(x:number,lo:number,hi:number)=>Math.max(lo,Math.min(hi,x));
 
@@ -37,8 +38,47 @@ export interface SocState {
   last_ts?:number|null; rest_run_s?:number; last_anchor_ts?:number;
   ah_since_anchor?:number; soc_at_anchor?:number; _prev?:{v:number;i:number};
   soc_cc?:number; soc_v?:number; anchored?:boolean; blended?:number; bms_soc?:number|null;
+  cutoff_latched?:boolean; true_anchor?:boolean; discharge_w_ema?:number;
+  runtime_min?:number|null; runtime_confidence?:string; usable_soc?:number;
 }
 export interface Sample { v:number; p_chg:number; ts:number; bms_soc?:number|null; }
+
+// Minutes remaining to the USER'S 45V operating cutoff at the recorded load.
+// 48.5V is the start of this partial discharge, not a 100% SOC anchor.
+export const OVERNIGHT_RUNTIME_CURVE: [number,number][] = [
+  [48.5,520], [47.7,340], [47.3,275], [46.5,135], [45,0],
+];
+export function referenceRuntimeMinutes(v:number):number {
+  const c=OVERNIGHT_RUNTIME_CURVE;
+  if(v<=45) return 0;
+  if(v>=48.5) return 520+(v-48.5)*60/0.31;
+  for(let k=0;k<c.length-1;k++) {
+    const [hi,hm]=c[k], [lo,lm]=c[k+1];
+    if(v>=lo && v<=hi) return lm+(v-lo)/(hi-lo)*(hm-lm);
+  }
+  return 0;
+}
+
+function predictions(s:SocState, v:number, p:number, cfg=DEFAULTS):SocState {
+  // Usable reserve is distinguished from chemical SOC. At the practical
+  // cutoff some chemical capacity remains, but none is usable by this system.
+  const cutoffSoc=socFromRestingVoltage(cfg.cutoff_v);
+  s.usable_soc = s.cutoff_latched ? 0 : clamp(((s.blended??0)-cutoffSoc)/(100-cutoffSoc)*100,0,100);
+  if(p>=-20) { s.runtime_min=null; s.runtime_confidence="unavailable"; return s; }
+  if(v<=cfg.cutoff_v || s.cutoff_latched) { s.runtime_min=0; s.runtime_confidence="cutoff"; return s; }
+  const draw=s.discharge_w_ema ?? -p;
+  // 318.25W was ONE observed DC sample, not a logged overnight mean. This
+  // provisional scaling is deliberately labelled low confidence in the UI.
+  const scale=clamp(Math.pow(318.25/Math.max(draw,20),cfg.peukert_exponent),0.25,4);
+  const curveMinutes=referenceRuntimeMinutes(v)*scale;
+  const availableAh=(s.c_usable_ah??140)*s.usable_soc/100;
+  const current=draw/v;
+  const ratePenalty=Math.max(1,Math.pow(current/(140/20),cfg.peukert_exponent-1));
+  const coulombMinutes=availableAh/Math.max(current*ratePenalty,0.01)*60;
+  s.runtime_min=Math.max(0,Math.min(curveMinutes,coulombMinutes));
+  s.runtime_confidence="low";
+  return s;
+}
 
 export function step(state: SocState, sample: Sample, cfg = DEFAULTS): SocState {
   const s: SocState = { c_usable_ah:cfg.c_usable_ah, ri_ohm:cfg.ri_ohm, eta_charge:cfg.eta_charge, ...state };
@@ -54,34 +94,55 @@ export function step(state: SocState, sample: Sample, cfg = DEFAULTS): SocState 
     // The very first sample seeds SOC from voltage under whatever load happens
     // to be running — that is a starting guess, not a true rest anchor, so it
     // must not be reported as anchored.
-    return { ...s, soc_cc:s.soc, soc_v:s.soc, anchored:false, blended:s.soc };
+    s.cutoff_latched = v<=cfg.cutoff_v && p_chg<=20;
+    s.discharge_w_ema = p_chg < -20 ? -p_chg : undefined;
+    return predictions({ ...s, soc_cc:s.soc, soc_v:s.soc, anchored:false, blended:s.soc },v,p_chg,cfg);
   }
   const rawDt = ts - (s.last_ts as number);
+  // Replayed or out-of-order telemetry cannot charge, discharge, blend or
+  // rewind time. Inverter SOC is copied separately by the caller.
+  if(rawDt<=0) return s;
   const contiguous = rawDt >= 0 && rawDt <= MAX_CONTIGUOUS_SAMPLE_GAP_S;
   const dtMeasured = contiguous ? rawDt : 0;
   const dt_h = dtMeasured / 3600;
   const i_signed = p_chg / v;
-  let dAh = i_signed*dt_h; if (dAh>0) dAh *= (s.eta_charge as number);
+  const avgI = s._prev && contiguous ? (s._prev.i+i_signed)/2 : i_signed;
+  const referenceI=140/20;
+  let dAh = avgI*dt_h;
+  if (dAh>0) dAh *= (s.eta_charge as number);
+  if (dAh<0) dAh *= Math.max(1,Math.pow(Math.abs(avgI)/referenceI,cfg.peukert_exponent-1));
   const soc_cc = clamp((s.soc as number) + (dAh/(s.c_usable_ah as number))*100, 0, 100);
   s.ah_since_anchor = (s.ah_since_anchor||0) + dAh;
   const v_rest = v - i_signed*(s.ri_ohm as number);
   const soc_v = socFromRestingVoltage(v_rest);
   if (s._prev && contiguous && rawDt>0){ const dI=i_signed-s._prev.i, dV=v-s._prev.v;
-    if (Math.abs(dI)>3){ const ri=-dV/dI; if (ri>0) s.ri_ohm=clamp(0.9*(s.ri_ohm as number)+0.1*ri,cfg.ri_bounds[0],cfg.ri_bounds[1]); } }
+    if (Math.abs(dI)>3){ const ri=dV/dI; if (ri>0) s.ri_ohm=clamp(0.9*(s.ri_ohm as number)+0.1*ri,cfg.ri_bounds[0],cfg.ri_bounds[1]); } }
   s._prev = { v, i:i_signed };
   const chargerHolding = i_signed>0.3 && v>50.4;
   const nearRest = Math.abs(i_signed)<cfg.rest_current_a && !chargerHolding;
   s.rest_run_s = (nearRest && contiguous) ? (s.rest_run_s||0)+dtMeasured : 0;
   let anchored=false;
-  if ((s.rest_run_s as number)>=cfg.rest_min_s && v_rest<=50.8 && v_rest>=42.0){
+  if ((s.rest_run_s as number)>=cfg.rest_min_s && !s.cutoff_latched && v_rest<=50.8 && v_rest>=45.0){
     const dSoc = soc_v-(s.soc_at_anchor ?? soc_v);
-    if (Math.abs(dSoc)>=8 && Math.abs(s.ah_since_anchor as number)>3){
+    if (s.true_anchor && Math.abs(dSoc)>=8 && Math.abs(s.ah_since_anchor as number)>3){
       const cap=Math.abs(s.ah_since_anchor as number)/(Math.abs(dSoc)/100);
       s.c_usable_ah=clamp(0.8*(s.c_usable_ah as number)+0.2*cap,cfg.cap_bounds[0],cfg.cap_bounds[1]); }
-    s.soc=soc_v; s.soc_at_anchor=soc_v; s.ah_since_anchor=0; s.last_anchor_ts=ts; s.rest_run_s=0; anchored=true;
+    s.soc=soc_v; s.soc_at_anchor=soc_v; s.ah_since_anchor=0; s.last_anchor_ts=ts; s.rest_run_s=0; s.true_anchor=true; anchored=true;
   } else {
-    s.soc = clamp(soc_cc + cfg.k_blend*(soc_v-soc_cc),0,100);
+    // Charging terminal voltage includes surface charge. While charging or
+    // idle, count measured Ah; only blend loaded voltage while discharging.
+    const blend=p_chg < -20 ? cfg.k_blend*Math.min(1,dtMeasured/60) : 0;
+    s.soc = clamp(soc_cc + blend*(soc_v-soc_cc),0,100);
+    if(p_chg < -20) s.soc=Math.min(s.soc,state.soc??s.soc);
   }
+  if(v<=cfg.cutoff_v && p_chg<=20) s.cutoff_latched=true;
+  // Voltage rebound alone is not restored reserve. Genuine measured charging
+  // above the cutoff must occur before predictions resume.
+  if(p_chg>20 && dAh>0 && v>cfg.cutoff_v+0.5) s.cutoff_latched=false;
+  if(p_chg < -20) s.discharge_w_ema=contiguous
+    ? (s.discharge_w_ema??-p_chg)*(1-Math.min(1,dtMeasured/300))+(-p_chg)*Math.min(1,dtMeasured/300)
+    : -p_chg;
+  else s.discharge_w_ema=undefined;
   s.last_ts = ts;
-  return { ...s, soc_cc, soc_v, anchored, blended:s.soc };
+  return predictions({ ...s, soc_cc, soc_v, anchored, blended:s.soc },v,p_chg,cfg);
 }

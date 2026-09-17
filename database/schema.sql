@@ -83,6 +83,10 @@ CREATE TABLE IF NOT EXISTS app_events (
 );
 -- ==========================
 -- BATTERY HISTORY (SOC engine)
+CREATE TABLE IF NOT EXISTS controller_commands (
+    id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL,
+    status TEXT NOT NULL, created_ts INTEGER NOT NULL, result TEXT
+);
 -- ==========================
 CREATE TABLE IF NOT EXISTS battery_history (
     ts INTEGER PRIMARY KEY,          -- unix seconds

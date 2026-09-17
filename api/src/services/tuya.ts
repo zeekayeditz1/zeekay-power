@@ -107,7 +107,16 @@ export interface TuyaStatus {
   frequency_hz: number | null; energy_total_kwh: number | null; fault: number | null; updated_at: string;
 }
 export async function fetchTuyaStatus(env: TuyaEnv): Promise<TuyaStatus> {
-  const d = await callWithTokenRetry(env, "GET", `/v1.0/devices/${env.TUYA_DEVICE_ID}/status`);
+  // Status DPs are cached by Tuya even after mains disappears. Device metadata
+  // carries the actual online flag; a successful cloud request proves nothing.
+  const [d, device] = await Promise.all([
+    callWithTokenRetry(env, "GET", `/v1.0/devices/${env.TUYA_DEVICE_ID}/status`),
+    callWithTokenRetry(env, "GET", `/v1.0/devices/${env.TUYA_DEVICE_ID}`),
+  ]);
+  if (!device.success || typeof device.result?.online !== "boolean") {
+    throw new Error("Tuya device online status could not be verified");
+  }
+  const online = device.result.online === true;
   if (!d.success) throw new Error(`tuya status: code=${d.code} ${d.msg}`);
   if (!Array.isArray(d.result)) throw new Error("tuya status returned an invalid result");
   const m: Record<string, any> = {}; for (const x of d.result) m[x.code] = x.value;
@@ -128,11 +137,11 @@ export async function fetchTuyaStatus(env: TuyaEnv): Promise<TuyaStatus> {
   const relayOn = switchDp !== null ? switchDp : m.relay_status === "power_on";
 
   return {
-    online: (m.online_state ?? "online") === "online",
+    online,
     relay_on: relayOn,
     relay_status: String(m.relay_status ?? (relayOn ? "power_on" : "power_off")),
-    grid_voltage: ph ? ph.voltage : null, grid_current: ph ? ph.current : null, grid_power: ph ? ph.power : null,
-    frequency_hz: m.supply_frequency != null ? m.supply_frequency / 10 : null,
+    grid_voltage: online && ph ? ph.voltage : null, grid_current: online && ph ? ph.current : null, grid_power: online && ph ? ph.power : null,
+    frequency_hz: online && m.supply_frequency != null ? m.supply_frequency / 10 : null,
     energy_total_kwh: m.forward_energy_total != null ? m.forward_energy_total / 100 : null,
     fault: m.fault ?? null, updated_at: new Date().toISOString(),
   };
@@ -153,7 +162,7 @@ export async function setTuyaRelayAndConfirm(env: TuyaEnv, on: boolean): Promise
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 500));
     last = await fetchTuyaStatus(env);
-    if (last.relay_on === on) return last;
+    if (last.online && last.relay_on === on) return last;
   }
   throw new Error(`Tuya accepted the command but the relay did not confirm ${on ? "ON" : "OFF"}`);
 }

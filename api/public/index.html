@@ -455,10 +455,11 @@
     <div class="view-heading view-item view-active" data-view="overview"><h2>Live power overview</h2><p>Your home energy flow, refreshed automatically from the cloud controller.</p></div>
     <div class="sync-strip view-item view-active" data-view="overview"><span class="sync-dot"></span><span id="syncSummary"><b>Connecting</b> · waiting for the first hardware sample</span></div>
     <div class="card big-card view-item view-active" data-view="overview">
-      <div class="bc-head"><h3>Battery</h3><div class="icon i-batt">🔋</div></div>
+      <div class="bc-head"><h3>Battery reserve</h3><div class="icon i-batt">🔋</div></div>
       <div class="bc-main"><span class="big mono" id="kBatt">--</span><span class="unit">%</span><span class="chip" id="battLabel">—</span></div>
       <div class="bar"><i id="battBar" style="width:0%"></i></div>
       <div class="sub" id="kBattSub">inverter: — · — V</div>
+      <div class="sub" id="kBattBackup">Backup estimate: —</div>
     </div>
 
     <div class="card big-card view-item view-active" data-view="overview">
@@ -765,6 +766,19 @@
     return body;
   }
 
+  async function controllerAction(path, body){
+    let result=await api(path,{method:"POST",body:JSON.stringify(body)});
+    if(result.queued) toast("Request saved — waiting for the current operation","ok");
+    const deadline=Date.now()+190000;
+    while(result.queued && Date.now()<deadline){
+      await new Promise(resolve=>setTimeout(resolve,1500));
+      result=await api("/api/commands/"+encodeURIComponent(result.command_id));
+    }
+    if(result.queued) throw new Error("Request is still pending; refresh status before trying again");
+    if(!result.success) throw new Error(result.message||"Controller request failed");
+    return result;
+  }
+
   /* ---------------- auth ---------------- */
   function showApp(){ $("login").style.display="none"; $("app").style.display="block"; }
   function showLogin(){ $("app").style.display="none"; $("login").style.display="flex"; $("password").value=""; }
@@ -844,6 +858,11 @@
     $("battBar").style.width = (soc==null?0:Math.max(0,Math.min(100,soc)))+"%";
     if($("battLabel")) $("battLabel").textContent = s.battery_soc_label||"—";
     $("kBattSub").textContent = "inverter: "+(s.bms_soc!=null?fmt(s.bms_soc,0)+"%":"—")+" · "+(s.battery_voltage!=null?fmt(s.battery_voltage,1)+" V":"— V");
+    const minutes=s.battery_runtime_min;
+    $("kBattBackup").textContent = s.stale ? "Backup estimate: stale readings" : s.battery_charging
+      ? "Backup estimate: charging" : minutes!=null
+      ? "Backup: ~"+Math.floor(Math.round(minutes)/60)+"h "+(Math.round(minutes)%60)+"m to 45 V · approximate"+(s.battery_knee_warning?" · final stretch":"")
+      : "Backup estimate: waiting for battery discharge";
     $("kSolar").textContent = fmt(s.solar_power,0);
     $("kSolarSub").textContent = "peak "+fmt(s.solar_peak_today,0)+" W · today "+fmt(s.pv_today_kwh,2)+" kWh";
     $("kLoad").textContent = fmt(s.load_power,0);
@@ -851,9 +870,9 @@
     $("kLoadSub").textContent = bp>20?("battery charging "+fmt(bp,0)+" W"):bp<-20?("battery discharging "+fmt(-bp,0)+" W"):"battery idle";
     const wapdaAvailable = !!s.wapda_available;
     const wapdaActive = !!s.wapda_active;
-    $("kGrid").textContent = wapdaAvailable ? (wapdaActive?"AVAILABLE · ACTIVE":"AVAILABLE · OFF") : "UNAVAILABLE · OFF";
+    $("kGrid").textContent = s.breaker_online!==true ? "METER OFFLINE" : wapdaAvailable ? (wapdaActive?"AVAILABLE · ACTIVE":"AVAILABLE · OFF") : "UNAVAILABLE · OFF";
     $("kGrid").className = "big wapda-state "+(wapdaActive?"ok":wapdaAvailable?"hot":"bad");
-    $("kGridSub").textContent = fmt(s.wapda_voltage,1)+" V · "+fmt(s.wapda_power,0)+" W · Tuya WAPDA meter";
+    $("kGridSub").textContent = s.breaker_online!==true ? "WAPDA availability unverified · cached readings hidden" : fmt(s.wapda_voltage,1)+" V · "+fmt(s.wapda_power,0)+" W · Tuya WAPDA meter";
     $("socNow").textContent = fmt(soc,0);
     if($("tWapdaPower")) $("tWapdaPower").textContent = fmt(s.wapda_power,0);
     if($("tWapdaVolts")) $("tWapdaVolts").textContent = fmt(s.wapda_voltage,1);
@@ -876,7 +895,7 @@
     $("relayMode").textContent = s.mode||"auto";
     $("relayUpd").textContent = ago(s.updated_at);
     const wapdaStatusEl = $("sgWapda");
-    wapdaStatusEl.textContent = wapdaAvailable ? (wapdaActive?"Available · Active":"Available · Off") : "Unavailable · Off";
+    wapdaStatusEl.textContent = s.breaker_online!==true ? "Unverified · Meter offline" : wapdaAvailable ? (wapdaActive?"Available · Active":"Available · Off") : "Unavailable · Off";
     wapdaStatusEl.className = "sgv "+(wapdaActive?"ok":wapdaAvailable?"hot":"bad");
     statusWord($("sgRelay"), on, ["Closed","Open"]);
     statusWord($("sgSolar"), (s.solar_power||0)>5, ["Generating","Idle"]);
@@ -940,15 +959,16 @@
   let unitLockEnabled=true;
   async function saveUnitLock(enabledOverride){
     if(unitLockBusy) return;
-    const limit=Number($("ulLimitInput").value);
-    if(!Number.isFinite(limit)||limit<0.1||limit>50){ toast("Enter a limit from 0.1 to 50 kWh","err"); return; }
     const nextEnabled=typeof enabledOverride==="boolean"?enabledOverride:unitLockEnabled;
+    const limit=Number($("ulLimitInput").value);
+    const validLimit=Number.isFinite(limit)&&limit>=0.1&&limit<=50;
+    if(nextEnabled&&!validLimit){ toast("Enter a limit from 0.1 to 50 kWh","err"); return; }
     unitLockBusy=true;
     const btn=$("ulSaveBtn"), original=btn.textContent;
     $("ulToggle").classList.add("busy");
     btn.disabled=true; btn.textContent="Saving…";
     try{
-      const r=await api("/api/unit-lock",{method:"POST",body:JSON.stringify({enabled:nextEnabled,limit_kwh:limit})});
+      const r=await controllerAction("/api/unit-lock",{enabled:nextEnabled,...(validLimit?{limit_kwh:limit}:{})});
       unitLockEnabled=!!r.enabled;
       toast(!r.enabled?"Units Lock is OFF — manual WAPDA control is available":r.will_lock_next_tick?"Settings saved — lock will apply on the next Tuya meter tick":"Units Lock settings saved","ok");
       await Promise.all([loadStatus(),loadAutoshift(),loadEvents()]);
@@ -1202,7 +1222,7 @@
     const tg=$("relayToggle");
     tg.classList.add("busy");
     try{
-      await api("/api/relay",{method:"POST",body:JSON.stringify({state:next?1:0})});
+      await controllerAction("/api/relay",{state:next?1:0});
       toast("WAPDA relay turned "+(next?"ON":"OFF"),"ok");
       await loadStatus(); loadEvents();
     }catch(e){

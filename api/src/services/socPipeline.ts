@@ -1,3 +1,4 @@
+import { processControllerCommands } from "./controllerCommands";
 /*
 | SOC + energy pipeline: pull SEMS, run estimator, read Tuya breaker, persist a
 | rich live_status for /api/status, log a daily energy row (real inverter
@@ -50,23 +51,18 @@ function localDay(ts_s: number) { return new Date((ts_s + 5 * 3600) * 1000).toIS
 export async function runSocTick(env: any) {
   await ensureTables(env);
 
-  // Guard against overlapping runs — the 1-minute cron and a manual "Force
-  // poll" click can land close together, and without this two concurrent ticks
-  // could both decide independently to fire a Tuya relay command.
+  // Manual controls run independently of SEMS, even when its API is down.
+  await processControllerCommands(env);
+  // Slow inverter polling does not occupy the hardware-control lock.
+  const snap = await fetchSemsSnapshot(env);
+  if (snap.v == null || snap.p_chg == null || !Number.isFinite(snap.v) ||
+      !Number.isFinite(snap.p_chg) || snap.v < 35 || snap.v > 65) {
+    throw new Error("SEMS returned an invalid battery sample");
+  }
   const nowEpoch = Math.floor(Date.now() / 1000);
-  const lockExpiresAt = await acquireTickLock(env, nowEpoch);
+  const lockExpiresAt = await acquireTickLock(env, nowEpoch, 180);
   if (lockExpiresAt == null) throw new Error("SOC tick already running");
-
   try {
-    const snap = await fetchSemsSnapshot(env);
-    if (
-      snap.v == null || snap.p_chg == null ||
-      !Number.isFinite(snap.v) || !Number.isFinite(snap.p_chg) ||
-      snap.v < 35 || snap.v > 65
-    ) {
-      throw new Error("SEMS returned an invalid battery sample");
-    }
-
     // --- SOC estimator ---
     let prev: SocState = {};
     try { const raw = await getState(env, "soc_state", ""); if (raw) prev = JSON.parse(raw); } catch {}
@@ -78,7 +74,7 @@ export async function runSocTick(env: any) {
     await env.zeekay_power_db.prepare(
       `INSERT OR REPLACE INTO battery_history (ts,v,p,soc_blended,soc_v,soc_cc,bms_soc,anchored)
      VALUES (?,?,?,?,?,?,?,?)`
-    ).bind(snap.ts, snap.v, snap.p_chg, r2(out.blended), r2(out.soc_v), r2(out.soc_cc), snap.bms_soc, out.anchored ? 1 : 0).run();
+    ).bind(snap.ts, snap.v, snap.p_chg, r2(out.usable_soc), r2(out.soc_v), r2(out.soc_cc), snap.bms_soc, out.anchored ? 1 : 0).run();
 
     // --- Tuya breaker (best-effort) ---
     let tuya: TuyaStatus | null = null;
@@ -138,7 +134,7 @@ export async function runSocTick(env: any) {
     let gridSignals: GridSignals = {
       relayOn: !!tuya?.relay_on,
       tuyaOnline: tuya?.online ?? null,
-      semsGridPower: snap.grid_power,
+      // WAPDA decisions use only live mains-side telemetry.
       tuyaGridPower: tuya?.grid_power ?? null,
       tuyaGridVoltage: tuya?.grid_voltage ?? null,
     };
@@ -283,7 +279,7 @@ export async function runSocTick(env: any) {
       }
       await setState(env, "autoshift_state", JSON.stringify(asState));
 
-      if (tuya?.relay_on && mayRetryUnitLockOff(unitState, snap.ts)) {
+      if (tuya?.online && tuya.relay_on && mayRetryUnitLockOff(unitState, snap.ts)) {
         const firstAttempt = unitState.command_attempts === 0;
         unitState = recordUnitLockOffAttempt(unitState, snap.ts);
         try {
@@ -320,7 +316,7 @@ export async function runSocTick(env: any) {
     gridSignals = {
       relayOn: !!tuya?.relay_on,
       tuyaOnline: tuya?.online ?? null,
-      semsGridPower: snap.grid_power,
+      // WAPDA decisions use only live mains-side telemetry.
       tuyaGridPower: tuya?.grid_power ?? null,
       tuyaGridVoltage: tuya?.grid_voltage ?? null,
     };
@@ -331,7 +327,7 @@ export async function runSocTick(env: any) {
     const inNightWindow = isPakistanNightWindow(snap.ts);
     const pvNow = snap.solar_power ?? 0;
 
-    if (tuya && !unitPlan.enforce_off) {
+    if (tuya?.online && !unitPlan.enforce_off) {
       const previousState = asState;
       const planInput = {
         nowTs: snap.ts,
@@ -444,8 +440,10 @@ export async function runSocTick(env: any) {
     const unitLockEnforced = isUnitLockEnforced(unitState, snap.ts, unitConfig.enabled);
     const status = {
       // battery
-      battery_soc: Math.round(out.blended ?? 0),
-      battery_soc_precise: r2(out.blended),
+      battery_soc: Math.round(out.usable_soc ?? 0),
+      battery_soc_precise: r2(out.usable_soc),
+      battery_soc_basis: "usable_reserve_to_45v_cutoff",
+      battery_chemical_soc: r2(out.blended),
       bms_soc: snap.bms_soc,
       soc_voltage: r2(out.soc_v),
       soc_coulomb: r2(out.soc_cc),
@@ -454,6 +452,12 @@ export async function runSocTick(env: any) {
       battery_power: r2(snap.p_chg),
       battery_charging: charging,
       usable_capacity_ah: r2(out.c_usable_ah),
+      battery_usable_soc: r2(out.usable_soc),
+      battery_runtime_min: r2(out.runtime_min),
+      battery_runtime_confidence: out.runtime_confidence,
+      battery_runtime_basis: "measured_overnight_curve_and_battery_draw",
+      battery_cutoff_voltage: 45,
+      battery_knee_warning: snap.p_chg < -20 && snap.v <= 46.5,
       // solar
       solar_power: Math.round(snap.solar_power || 0),
       solar_peak_today: Math.round(acc.pv_peak_w || 0),
@@ -532,6 +536,7 @@ export async function runSocTick(env: any) {
   } finally {
     try {
       await releaseTickLock(env, lockExpiresAt);
+      await processControllerCommands(env);
     } catch (error: any) {
       console.error("failed to release SOC tick lock:", error?.message);
     }

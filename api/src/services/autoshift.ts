@@ -154,8 +154,8 @@ function backoffFor(attempts: number): number {
  *  on pure battery and proves nothing about the grid. */
 export function isMainsAvailable(signals: GridSignals): boolean {
   const semsPower = Math.abs(signals.semsGridPower ?? 0);
-  const tuyaPower = Math.abs(signals.tuyaGridPower ?? 0);
-  const tuyaVoltage = signals.tuyaGridVoltage ?? 0;
+  const tuyaPower = signals.tuyaOnline === true ? Math.abs(signals.tuyaGridPower ?? 0) : 0;
+  const tuyaVoltage = signals.tuyaOnline === true ? signals.tuyaGridVoltage ?? 0 : 0;
   return semsPower > 20 || tuyaPower > 20 || tuyaVoltage > 50;
 }
 

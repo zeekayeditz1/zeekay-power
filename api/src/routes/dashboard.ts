@@ -1,3 +1,4 @@
+import { enqueueControllerCommand, getControllerCommand, processControllerCommands, waitForControllerCommand } from "../services/controllerCommands";
 import { Hono } from "hono";
 import { authMiddleware, requireFullAccess } from "../middleware/auth";
 import {
@@ -26,8 +27,6 @@ import {
   isUnitLockEnforced,
   normalizeUnitLockConfig,
   normalizeUnitLockState,
-  planUnitLock,
-  reconcileUnitLockAutoshift,
   unitLockWarningKwh,
   unitLockWindow,
 } from "../services/unitLock";
@@ -72,6 +71,11 @@ async function snapshot(env: any) {
 
   let tuya: any = null;
   try { const traw = await getState(env, "tuya_status", ""); if (traw) tuya = JSON.parse(traw); } catch {}
+  const tuyaAge = tuya ? Date.now() - Date.parse(tuya.updated_at || "") : Infinity;
+  const reachable = await getState(env, "tuya_reachable", "0") === "1";
+  if (tuya && (!reachable || !Number.isFinite(tuyaAge) || tuyaAge > 180000 || tuyaAge < -5000 || tuya.online !== true)) {
+    tuya = { ...tuya, online: false, grid_voltage: null, grid_current: null, grid_power: null };
+  }
   const relayReal = tuya ? (tuya.relay_on ? 1 : 0) : relay;
 
   let unitLock = normalizeUnitLockState(null);
@@ -107,15 +111,8 @@ async function snapshot(env: any) {
     const raw = await getState(env, "live_status", "");
     if (raw) {
       const s = JSON.parse(raw);
-      const signals: GridSignals = {
-        relayOn: relayReal === 1,
-        tuyaOnline: tuya?.online ?? s.breaker_online ?? null,
-        semsGridPower: s.grid_power,
-        tuyaGridPower: tuya?.grid_power,
-        tuyaGridVoltage: tuya?.grid_voltage ?? s.grid_voltage,
-      };
-      const mainsAvailable = typeof s.mains_available === "boolean" ? s.mains_available : isMainsAvailable(signals);
-      const gridConnected = typeof s.grid_connected === "boolean" ? s.grid_connected : isGridConnected(signals);
+      const mainsAvailable = wapdaAvailableFromTuya;
+      const gridConnected = wapdaActiveFromTuya;
 
       const parsedSoc = Number(s.battery_soc);
       const soc = s.battery_soc != null && Number.isFinite(parsedSoc) ? parsedSoc : null;
@@ -133,6 +130,8 @@ async function snapshot(env: any) {
         stale,
         sample_age_s: sampleAgeS,
         battery_soc: soc,
+        battery_soc_basis: s.battery_soc_basis ?? "legacy_estimate",
+        battery_chemical_soc: s.battery_chemical_soc ?? null,
         battery_soc_label: socLabel,
         bms_soc: s.bms_soc,
         battery_voltage: s.battery_voltage,
@@ -143,6 +142,12 @@ async function snapshot(env: any) {
         soc_voltage: s.soc_voltage,
         soc_coulomb: s.soc_coulomb,
         usable_capacity_ah: s.usable_capacity_ah,
+        battery_usable_soc: s.battery_usable_soc ?? null,
+        battery_runtime_min: stale ? null : s.battery_runtime_min ?? null,
+        battery_runtime_confidence: stale ? "unavailable" : s.battery_runtime_confidence ?? "unavailable",
+        battery_runtime_basis: s.battery_runtime_basis ?? null,
+        battery_cutoff_voltage: 45,
+        battery_knee_warning: s.battery_knee_warning ?? false,
         solar_power: s.solar_power,
         solar_peak_today: s.solar_peak_today,
         pv_today_kwh: s.pv_today_kwh,
@@ -167,7 +172,7 @@ async function snapshot(env: any) {
         wapda_voltage: tuya?.grid_voltage ?? null,
         wapda_current: tuya?.grid_current ?? null,
         wapda_source: "tuya",
-        grid_voltage: s.grid_voltage ?? tuya?.grid_voltage ?? null,
+        grid_voltage: tuya?.grid_voltage ?? null,
         relay_state: relayReal,
         relay_closed: relayReal === 1,
         mode,
@@ -176,7 +181,7 @@ async function snapshot(env: any) {
         charge_from_wapda_kwh: s.charge_from_wapda_kwh,
         total_charge_kwh: s.total_charge_kwh,
         discharge_today_kwh: s.discharge_today_kwh,
-        breaker_online: s.breaker_online,
+        breaker_online: tuya?.online ?? false,
         breaker_energy_kwh: tuya?.energy_total_kwh ?? s.breaker_energy_kwh ?? null,
         unit_lock_enabled: unitConfig.enabled,
         unit_lock_limit_kwh: unitConfig.limit_kwh,
@@ -345,88 +350,11 @@ dashboard.post("/unit-lock", requireFullAccess, async (c) => {
       }, 400);
     }
   }
-  const now = Math.floor(Date.now() / 1000);
-  const tickLock = await acquireTickLock(env, now);
-  if (tickLock == null) {
-    return c.json({ success: false, message: "The controller is busy; wait a few seconds and try again" }, 409);
-  }
-
-  let previousConfig = normalizeUnitLockConfig(null);
-  let config = normalizeUnitLockConfig(null);
-  let state = normalizeUnitLockState(null);
-  let autoshiftRestored = false;
-  try {
-    // Read and write the configuration and controller state under the same
-    // lock as the one-minute pipeline. This prevents a stale UI request from
-    // overwriting a state transition that happened just before the click.
-    previousConfig = await loadUnitLockConfig(env);
-    config = normalizeUnitLockConfig({
-      enabled: typeof body.enabled === "boolean" ? body.enabled : previousConfig.enabled,
-      limit_kwh: requestedLimit ?? previousConfig.limit_kwh,
-    });
-    try {
-      const raw = await getState(env, "unit_lock_state", "");
-      state = normalizeUnitLockState(raw ? JSON.parse(raw) : null);
-    } catch {}
-
-    // Disabling is fail-safe: publish the OFF config before clearing state so
-    // no concurrent/new tick can enforce an old lock. Enabling is published
-    // only after the old session has been reset to a fresh Tuya baseline.
-    if (!config.enabled) await setState(env, "unit_lock_cfg", JSON.stringify(config));
-
-    if (!config.enabled || !previousConfig.enabled) {
-      const disabledPlan = planUnitLock(state, { nowTs: now, energyTotalKwh: null }, {
-        enabled: false,
-        limit_kwh: config.limit_kwh,
-      });
-      let autoshift: AutoshiftConfig = { ...AUTOSHIFT_DEFAULT };
-      try {
-        const raw = await getState(env, "autoshift_cfg", "");
-        autoshift = normalizeAutoshiftConfig(raw ? JSON.parse(raw) : autoshift);
-      } catch {}
-      const reconciled = reconcileUnitLockAutoshift(disabledPlan.state, disabledPlan, autoshift.enabled);
-      state = reconciled.state;
-      autoshiftRestored = reconciled.restored_at_release;
-      if (reconciled.settings_changed) {
-        autoshift = { ...autoshift, enabled: reconciled.enabled };
-        await setState(env, "autoshift_cfg", JSON.stringify(autoshift));
-      }
-      await setState(env, "unit_lock_state", JSON.stringify(state));
-    }
-
-    if (config.enabled) await setState(env, "unit_lock_cfg", JSON.stringify(config));
-  } finally {
-    await releaseTickLock(env, tickLock).catch(() => {});
-  }
-
-  const locked = isUnitLockEnforced(state, now, config.enabled);
-  const willLockNextTick = config.enabled && !locked && unitLockWindow(now).active && state.used_kwh >= config.limit_kwh;
-  const enabledChanged = config.enabled !== previousConfig.enabled;
-  await logEvent(
-    env,
-    "unit_lock",
-    enabledChanged ? `Units Lock turned ${config.enabled ? "ON" : "OFF"}` : `Units Lock limit set to ${config.limit_kwh.toFixed(2)} kWh`,
-    !config.enabled
-      ? "Tracking and breaker enforcement are disabled. Turning the breaker ON manually will not be reversed by Units Lock. Re-enabling starts a fresh Tuya meter baseline."
-      : locked
-        ? "The current Tuya-meter lock remains enforced until 08:00; changing the value cannot release it early."
-        : willLockNextTick
-          ? "Current Tuya meter usage is already at or above this value, so WAPDA and auto-shift will be turned OFF on the next one-minute cloud tick."
-          : `Only Tuya forward_energy_total is counted from 17:00–06:00. Warning starts at ${unitLockWarningKwh(config.limit_kwh).toFixed(2)} kWh.`
-  );
-
-  return c.json({
-    success: true,
-    enabled: config.enabled,
-    limit_kwh: config.limit_kwh,
-    warning_kwh: unitLockWarningKwh(config.limit_kwh),
-    used_kwh: Math.round(state.used_kwh * 100) / 100,
-    locked,
-    will_lock_next_tick: willLockNextTick,
-    autoshift_restored: autoshiftRestored,
-    source: "tuya_forward_energy_total_only",
-    applies_within_seconds: 60,
-  });
+  const payload = {
+    ...(typeof body.enabled === "boolean" ? { enabled: body.enabled } : {}),
+    ...(requestedLimit != null ? { limit_kwh: requestedLimit } : {}),
+  };
+  return submitCommand(c, "unit-lock", payload);
 });
 
 /* ---------- GET /api/history?hours=24 ---------- */
@@ -478,81 +406,23 @@ dashboard.post("/relay", requireFullAccess, async (c) => {
     return c.json({ success: false, message: "state must be 0, 1, false, or true" }, 400);
   }
   const next = validOn ? 1 : 0;
-  const nowEpoch = Math.floor(Date.now() / 1000);
+  return submitCommand(c, "relay", { state: next });
+});
 
-  if (next === 1) {
-    try {
-      const raw = await getState(c.env as any, "unit_lock_state", "");
-      const unitLock = normalizeUnitLockState(raw ? JSON.parse(raw) : null);
-      const unitConfig = await loadUnitLockConfig(c.env as any);
-      if (isUnitLockEnforced(unitLock, nowEpoch, unitConfig.enabled)) {
-        const unlockAt = unitLock.unlock_ts ? new Date(unitLock.unlock_ts * 1000).toISOString() : null;
-        return c.json({
-          success: false,
-          message: `WAPDA is locked OFF because the ${unitConfig.limit_kwh.toFixed(2)} kWh limit was reached`,
-          code: "UNIT_LOCK_ACTIVE",
-          unlock_at: unlockAt,
-        }, 423);
-      }
-    } catch {
-      return c.json({
-        success: false,
-        message: "Units Lock state could not be verified; WAPDA was not switched on",
-      }, 503);
-    }
+async function submitCommand(c: any, kind: "unit-lock" | "relay", payload: any) {
+  const id = await enqueueControllerCommand(c.env, kind, payload);
+  await processControllerCommands(c.env);
+  const result = await getControllerCommand(c.env, id);
+  if (result?.queued) {
+    c.executionCtx.waitUntil(waitForControllerCommand(c.env, id));
+    return c.json({ ...result, message: "Request saved; waiting for the current controller operation" }, 202);
   }
+  return c.json(result, result?.success ? 200 : result?.http_status ?? 502);
+}
 
-  // Take the same lock the cron tick uses, so a manual switch can never race a
-  // running auto-shift decision.
-  const lockExpiresAt = await acquireTickLock(c.env as any, nowEpoch);
-  if (lockExpiresAt == null) {
-    return c.json({ success: false, message: "The controller is busy; refresh and try again" }, 409);
-  }
-
-  try {
-    const confirmed = await setTuyaRelayAndConfirm(c.env as any, next === 1);
-    await setState(c.env as any, "relay_state", confirmed.relay_on ? "1" : "0");
-    await setState(c.env as any, "relay_last_known", confirmed.relay_on ? "1" : "0");
-    await setState(c.env as any, "tuya_status", JSON.stringify(confirmed));
-    await setState(c.env as any, "relay_command_pending", "");
-
-    // Manual override wins: if auto-shift was mid-cycle and the user just
-    // turned WAPDA off, drop the cycle so /api/status stops reporting a phase
-    // that is no longer running.
-    if (next === 0) {
-      try {
-        const raw = await getState(c.env as any, "autoshift_state", "");
-        const state = normalizeAutoshiftState(raw ? JSON.parse(raw) : null);
-        if (state.phase !== "idle") {
-          // Stamp last_end_ts so the cooldown applies. Without it the very next
-          // cron tick would see a low battery and immediately close the relay
-          // again — turning a deliberate manual OFF into a 60-second flap.
-          await setState(
-            c.env as any,
-            "autoshift_state",
-            JSON.stringify({ ...normalizeAutoshiftState(null), last_end_ts: Math.floor(Date.now() / 1000) })
-          );
-          await logEvent(c.env as any, "autoshift", "Auto-shift cycle ended", "Manually overridden from dashboard after relay OFF was confirmed");
-        }
-      } catch (error: any) {
-        console.error("failed to clear auto-shift after manual override:", error?.message);
-      }
-    }
-
-    await logEvent(
-      c.env as any,
-      "relay",
-      `WAPDA relay ${next ? "closed (ON)" : "opened (OFF)"}`,
-      "Manual override confirmed by Tuya read-back"
-    );
-
-    return c.json({ success: true, relay_state: next, confirmed: true });
-  } catch (e: any) {
-    console.error("manual relay command failed:", e?.message);
-    return c.json({ success: false, message: "Relay command was not confirmed; the displayed state will be refreshed" }, 502);
-  } finally {
-    await releaseTickLock(c.env as any, lockExpiresAt).catch(() => {});
-  }
+dashboard.get("/commands/:id", requireFullAccess, async (c) => {
+  const result = await getControllerCommand(c.env, c.req.param("id")!);
+  return result ? c.json(result) : c.json({ success: false, message: "Command not found" }, 404);
 });
 
 /* ---------- POST /api/poll ---------- */
