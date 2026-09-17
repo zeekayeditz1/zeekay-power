@@ -9,7 +9,8 @@
     "test": "vitest run --config vitest.unit.config.mts",
     "cf-typegen": "wrangler types",
     "test:unit": "vitest run --config vitest.unit.config.mts",
-    "test:worker": "vitest run"
+    "test:worker": "vitest run",
+    "test:audit": "node test/audit-regression.cjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

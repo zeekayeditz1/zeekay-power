@@ -1,5 +1,5 @@
 import { enqueueControllerCommand, getControllerCommand, processControllerCommands, waitForControllerCommand } from "../services/controllerCommands";
-import { billingCycles, dischargeDays, wapdaEnergyDays } from "../services/energyStore";
+import { billingCycles, dischargeDays, wapdaEnergyDays, runWapdaEnergyTick } from "../services/energyStore";
 import { localEnergyDate } from "../services/energy";
 import { Hono } from "hono";
 import { authMiddleware, requireFullAccess } from "../middleware/auth";
@@ -9,11 +9,8 @@ import {
   setState,
   logEvent,
   getEvents,
-  acquireTickLock,
-  releaseTickLock,
 } from "../services/dashboardStore";
 import { runSocTick } from "../services/socPipeline";
-import { setTuyaRelayAndConfirm } from "../services/tuya";
 import {
   AUTOSHIFT_DEFAULT,
   AutoshiftConfig,
@@ -78,7 +75,8 @@ async function snapshot(env: any) {
   if (tuya && (!reachable || !Number.isFinite(tuyaAge) || tuyaAge > 180000 || tuyaAge < -5000 || tuya.online !== true)) {
     tuya = { ...tuya, online: false, grid_voltage: null, grid_current: null, grid_power: null };
   }
-  const relayReal = tuya ? (tuya.relay_on ? 1 : 0) : relay;
+  const relayKnown=tuya?.online===true;
+  const relayReal=relayKnown?(tuya.relay_on?1:0):null;
 
   let unitLock = normalizeUnitLockState(null);
   try {
@@ -106,6 +104,8 @@ async function snapshot(env: any) {
   };
   const wapdaAvailableFromTuya = tuya ? isMainsAvailable(tuyaOnlySignals) : false;
   const wapdaActiveFromTuya = tuya ? isGridConnected(tuyaOnlySignals) : false;
+  const autoRaw=await getState(env,"autoshift_state","");
+  const autoState=normalizeAutoshiftState(autoRaw?JSON.parse(autoRaw):null);
 
   try {
     const raw = await getState(env, "live_status", "");
@@ -120,7 +120,7 @@ async function snapshot(env: any) {
       const charging = !!s.battery_charging;
       const bstate = charging ? "charging" : (s.battery_power ?? 0) < -20 ? "discharging" : "idle";
 
-      const updatedMs = Date.parse(s.updated_at || "");
+      const updatedMs = Date.parse(s.sample_at || s.updated_at || "");
       const sampleAgeS = Number.isFinite(updatedMs) ? Math.max(0, Math.floor((Date.now() - updatedMs) / 1000)) : null;
       const stale = sampleAgeS == null || sampleAgeS > 180;
 
@@ -161,6 +161,7 @@ async function snapshot(env: any) {
         energy_today: s.pv_today_kwh,
         grid_power: s.grid_power,
         frequency: s.frequency,
+        inverter_grid_today_kwh: s.inverter_grid_today_kwh ?? null,
         wapda_today_kwh: wapdaDay?.kwh ?? null,
         wapda_today_partial: wapdaDay ? wapdaDay.reported_kwh==null&&!!wapdaDay.partial : true,
         meter_total_kwh: tuya?.energy_total_kwh ?? null,
@@ -175,7 +176,9 @@ async function snapshot(env: any) {
         wapda_source: "tuya",
         grid_voltage: tuya?.grid_voltage ?? null,
         relay_state: relayReal,
-        relay_closed: relayReal === 1,
+        relay_known: relayKnown,
+        relay_last_known: tuya ? (tuya.relay_on?1:0) : relay,
+        relay_closed: relayKnown ? relayReal === 1 : null,
         mode,
         controller: "cloudflare-primary",
         charge_from_solar_kwh: s.charge_from_solar_kwh,
@@ -196,6 +199,7 @@ async function snapshot(env: any) {
         unit_lock_used_kwh: Math.round(unitLock.used_kwh * 100) / 100,
         unit_lock_remaining_kwh: Math.round(Math.max(0, unitConfig.limit_kwh - unitLock.used_kwh) * 100) / 100,
         unit_lock_locked: unitLockEnforced,
+        unit_lock_partial: unitLock.tracking_partial===true,
         unit_lock_phase: unitLockPhase,
         unit_lock_window_start: unitLock.window_start_ts ? new Date(unitLock.window_start_ts * 1000).toISOString() : null,
         unit_lock_window_end: unitLock.window_end_ts ? new Date(unitLock.window_end_ts * 1000).toISOString() : null,
@@ -203,12 +207,12 @@ async function snapshot(env: any) {
         unit_lock_tracking_since: unitLock.initialized_at_ts ? new Date(unitLock.initialized_at_ts * 1000).toISOString() : null,
         unit_lock_restore_autoshift: unitLock.restore_autoshift_on_unlock,
         unit_lock_source: "tuya_forward_energy_total_only",
-        autoshift_phase: s.autoshift_phase,
-        autoshift_active: s.autoshift_active,
-        autoshift_charging: s.autoshift_charging,
-        autoshift_until: s.autoshift_until,
-        autoshift_trigger_voltage: s.autoshift_trigger_voltage,
-        autoshift_stop_reason: s.autoshift_stop_reason,
+        autoshift_phase: autoState.phase,
+        autoshift_active: autoState.phase!=="idle",
+        autoshift_charging: !stale && charging && gridConnected && autoState.phase==="charging",
+        autoshift_until: autoState.until_ts?new Date(autoState.until_ts*1000).toISOString():null,
+        autoshift_trigger_voltage: autoState.trigger_voltage,
+        autoshift_stop_reason: autoState.stop_reason,
         autoshift_min_on_until: s.autoshift_min_on_until ?? null,
         autoshift_cooldown_until: s.autoshift_cooldown_until ?? null,
         sample_at: s.sample_at,
@@ -268,7 +272,9 @@ async function snapshot(env: any) {
     wapda_current: tuya?.grid_current ?? null,
     wapda_source: "tuya",
     relay_state: relayReal,
-    relay_closed: relayReal === 1,
+        relay_known: relayKnown,
+        relay_last_known: tuya ? (tuya.relay_on?1:0) : relay,
+    relay_closed: relayKnown ? relayReal === 1 : null,
     mode,
     controller: "cloudflare-primary",
     charge_from_solar_kwh: null,
@@ -289,6 +295,7 @@ async function snapshot(env: any) {
     unit_lock_used_kwh: Math.round(unitLock.used_kwh * 100) / 100,
     unit_lock_remaining_kwh: Math.round(Math.max(0, unitConfig.limit_kwh - unitLock.used_kwh) * 100) / 100,
     unit_lock_locked: unitLockEnforced,
+        unit_lock_partial: unitLock.tracking_partial===true,
     unit_lock_phase: unitLockPhase,
     unit_lock_window_start: unitLock.window_start_ts ? new Date(unitLock.window_start_ts * 1000).toISOString() : null,
     unit_lock_window_end: unitLock.window_end_ts ? new Date(unitLock.window_end_ts * 1000).toISOString() : null,
@@ -421,7 +428,7 @@ dashboard.post("/relay", requireFullAccess, async (c) => {
   return submitCommand(c, "relay", { state: next });
 });
 
-async function submitCommand(c: any, kind: "unit-lock" | "relay", payload: any) {
+async function submitCommand(c: any, kind: "unit-lock" | "relay" | "autoshift", payload: any) {
   const id = await enqueueControllerCommand(c.env, kind, payload);
   await processControllerCommands(c.env);
   const result = await getControllerCommand(c.env, id);
@@ -444,6 +451,7 @@ dashboard.post("/poll", requireFullAccess, async (c) => {
   } catch (e: any) {
     console.error("manual poll failed:", e?.message);
     const busy = e?.message === "SOC tick already running";
+    if(!busy) { try { await runWapdaEnergyTick(c.env); } catch {} }
     return c.json(
       { success: false, message: busy ? "A poll is already running" : "Could not refresh inverter data" },
       busy ? 409 : 502
@@ -483,6 +491,7 @@ dashboard.get("/autoshift", async (c) => {
   } catch {}
   const unitConfig = await loadUnitLockConfig(env);
   const unitsLocked = isUnitLockEnforced(unitLock, Math.floor(Date.now() / 1000), unitConfig.enabled);
+  const live=await snapshot(env);
 
   return c.json({
     success: true,
@@ -495,7 +504,7 @@ dashboard.get("/autoshift", async (c) => {
     window: "18:00–06:00 (Pakistan time) — fixed, not adjustable here",
     phase: state.phase,
     active: state.phase !== "idle",
-    charging: state.phase === "charging",
+    charging: state.phase === "charging" && live.autoshift_charging===true,
     stopping: state.phase === "stopping",
     stop_reason: state.stop_reason ?? null,
     units_locked: unitsLocked,
@@ -525,43 +534,9 @@ dashboard.post("/autoshift", requireFullAccess, async (c) => {
     return c.json({ success: false, message: "Invalid settings body" }, 400);
   }
 
-  let cfg: AutoshiftConfig = { ...AUTOSHIFT_DEFAULT };
-  try {
-    const raw = await getState(env, "autoshift_cfg", "");
-    cfg = normalizeAutoshiftConfig(raw ? JSON.parse(raw) : cfg);
-  } catch {}
-
-  let unitLockForSettings = normalizeUnitLockState(null);
-  try {
-    const raw = await getState(env, "unit_lock_state", "");
-    unitLockForSettings = normalizeUnitLockState(raw ? JSON.parse(raw) : null);
-  } catch {
-    if (body.enabled === true) {
-      return c.json({ success: false, message: "Units Lock state could not be verified; auto-shift was not enabled" }, 503);
-    }
-  }
-  const settingsNow = Math.floor(Date.now() / 1000);
-  const unitConfigForSettings = await loadUnitLockConfig(env);
-  const unitsLocked = isUnitLockEnforced(unitLockForSettings, settingsNow, unitConfigForSettings.enabled);
-  if (body.enabled === true && unitsLocked) {
-    return c.json({
-      success: false,
-      message: `Auto-shift cannot be enabled while the ${unitConfigForSettings.limit_kwh.toFixed(2)} kWh WAPDA lock is active`,
-      code: "UNIT_LOCK_ACTIVE",
-      unlock_at: unitLockForSettings.unlock_ts
-        ? new Date(unitLockForSettings.unlock_ts * 1000).toISOString()
-        : null,
-    }, 423);
-  }
-  if (!unitsLocked && unitLockForSettings.locked && typeof body.enabled === "boolean") {
-    unitLockForSettings = {
-      ...unitLockForSettings,
-      locked: false,
-      restore_autoshift_on_unlock: false,
-    };
-    await setState(env, "unit_lock_state", JSON.stringify(unitLockForSettings));
-  }
-  if (typeof body.enabled === "boolean") cfg.enabled = body.enabled;
+  const cfg:any={};
+  if(body.enabled!=null && typeof body.enabled!=="boolean") return c.json({success:false,message:"Invalid enabled value"},400);
+  if(typeof body.enabled==="boolean") cfg.enabled=body.enabled;
   if (body.threshold_v != null) {
     const v = Number(body.threshold_v);
     if (!Number.isFinite(v) || v < 40 || v > 58) return c.json({ success: false, error: "threshold_v must be between 40 and 58 V" }, 400);
@@ -588,47 +563,7 @@ dashboard.post("/autoshift", requireFullAccess, async (c) => {
     cfg.cooldown_min = m;
   }
 
-  await setState(env, "autoshift_cfg", JSON.stringify(cfg));
-
-  // Turning the feature off must actually open the relay, not just stop future
-  // cycles. If the confirmation can't be obtained right now the cycle is left
-  // in "stopping" so the next tick retries.
-  let cancellationPending = false;
-  if (!cfg.enabled) {
-    try {
-      const raw = await getState(env, "autoshift_state", "");
-      const state = normalizeAutoshiftState(raw ? JSON.parse(raw) : null);
-      if (state.phase !== "idle") {
-        cancellationPending = true;
-        await setState(env, "autoshift_state", JSON.stringify({ ...state, phase: "stopping", until_ts: null, stop_reason: "disabled" }));
-        const nowEpoch = Math.floor(Date.now() / 1000);
-        const lockExpiresAt = await acquireTickLock(env, nowEpoch);
-        if (lockExpiresAt != null) {
-          try {
-            const confirmed = await setTuyaRelayAndConfirm(env, false);
-            await setState(env, "relay_state", "0");
-            await setState(env, "relay_last_known", "0");
-            await setState(env, "tuya_status", JSON.stringify(confirmed));
-            await setState(env, "relay_command_pending", "");
-            await setState(env, "autoshift_state", JSON.stringify(normalizeAutoshiftState(null)));
-            cancellationPending = false;
-          } catch (error: any) {
-            console.error("auto-shift disable OFF confirmation failed:", error?.message);
-          } finally {
-            await releaseTickLock(env, lockExpiresAt).catch(() => {});
-          }
-        }
-      }
-    } catch (error: any) {
-      console.error("failed to cancel auto-shift:", error?.message);
-      cancellationPending = true;
-    }
-  }
-
-  await logEvent(env, "autoshift", `Auto-shift settings updated`,
-    `${cfg.enabled ? "Enabled" : "Disabled"} · trigger ≤ ${cfg.threshold_v} V (18:00–06:00 only) · hold up to ${cfg.duration_min} min · stop early at PV ≥ ${cfg.pv_stop_w} W · relay protection: ${cfg.min_on_min} min minimum ON, ${cfg.cooldown_min} min cooldown`);
-
-  return c.json({ success: true, ...cfg, cancellation_pending: cancellationPending });
+  return submitCommand(c,"autoshift",cfg);
 });
 
 /* ---------- Battery discharge: Pakistan 17:00 through next-day 17:00 ---------- */

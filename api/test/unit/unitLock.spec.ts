@@ -189,6 +189,7 @@ describe("lock enforcement and reset", () => {
   it("does not touch automation when the finished window stays below 6 kWh", () => {
     const t0 = PKT("2026-08-11", 17, 0);
     let plan = planUnitLock(null, { nowTs: t0, energyTotalKwh: 20 });
+    plan = planUnitLock(plan.state,{nowTs:PKT("2026-08-12",5,59),energyTotalKwh:25.9});
     plan = planUnitLock(plan.state, {
       nowTs: PKT("2026-08-12", 6, 1),
       energyTotalKwh: 25.9,

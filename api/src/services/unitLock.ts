@@ -27,6 +27,7 @@ const PKT_OFFSET_S = 5 * 3600;
 const ENERGY_EPSILON_KWH = 0.000001;
 
 export interface UnitLockState {
+  tracking_partial?: boolean;
   version: 3;
   /** Limit used by the most recent decision. The live config remains authoritative. */
   limit_kwh: number;
@@ -163,6 +164,7 @@ export function normalizeUnitLockState(value: unknown): UnitLockState {
   );
   return {
     version: 3,
+    tracking_partial: raw.tracking_partial === true,
     limit_kwh: limit,
     window_start_ts: finiteOrNull(raw.window_start_ts),
     window_end_ts: finiteOrNull(raw.window_end_ts),
@@ -193,6 +195,7 @@ function startWindow(
     ...EMPTY_UNIT_LOCK_STATE,
     limit_kwh: config.limit_kwh,
     window_start_ts: window.start,
+    tracking_partial: meter==null || input.nowTs-window.start>180,
     window_end_ts: window.end,
     unlock_ts: window.unlock,
     meter_start_kwh: meter,
@@ -217,6 +220,7 @@ function accumulate(state: UnitLockState, input: UnitLockInput): UnitLockState {
     // reading becomes the next baseline and accumulation continues forward.
     next.meter_last_kwh = meter;
   }
+  if(meter==null) next.tracking_partial=true;
 
   next.used_kwh = next.meter_delta_kwh;
   next.last_sample_ts = input.nowTs;
@@ -282,8 +286,9 @@ export function planUnitLock(
     // If the first poll after 06:00 is a minute or two late, count the final
     // Tuya meter increment conservatively before freezing the finished window.
     const shouldFinishLastSample =
-      !window.active && state.last_sample_ts != null && state.last_sample_ts < window.end;
+      !window.active && input.nowTs <= window.end + 120 && state.last_sample_ts != null && state.last_sample_ts >= window.end - 180 && state.last_sample_ts < window.end;
     if (window.active || shouldFinishLastSample) state = accumulate(state, input);
+    else if(!window.active && state.last_sample_ts!=null && state.last_sample_ts<window.end) state={...state,tracking_partial:true};
   }
 
   const warningReached =

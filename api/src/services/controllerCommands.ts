@@ -3,7 +3,7 @@ import { normalizeUnitLockConfig, normalizeUnitLockState, planUnitLock, reconcil
 import { normalizeAutoshiftConfig, normalizeAutoshiftState } from "./autoshift";
 import { setTuyaRelayAndConfirm } from "./tuya";
 
-export type CommandKind = "unit-lock" | "relay";
+export type CommandKind = "unit-lock" | "relay" | "autoshift";
 export interface ControllerCommand {
   id: string; kind: CommandKind; payload: string; status: string;
   created_ts: number; result: string | null;
@@ -48,6 +48,31 @@ async function applyUnitLockSettings(env: any, body: any) {
   return { success: true, ...config, locked, will_lock_next_tick: willLock,
     warning_kwh: unitLockWarningKwh(config.limit_kwh), used_kwh: state.used_kwh,
     autoshift_restored: restored, source: "tuya_forward_energy_total_only", applies_within_seconds: 60 };
+}
+
+async function applyAutoshiftSettings(env:any,body:any) {
+  const now=Math.floor(Date.now()/1000);
+  const unitConfig=normalizeUnitLockConfig(await readJson(env,"unit_lock_cfg"));
+  const unit=normalizeUnitLockState(await readJson(env,"unit_lock_state"));
+  if(body.enabled===true && isUnitLockEnforced(unit,now,unitConfig.enabled)) return {success:false,code:"UNIT_LOCK_ACTIVE",message:"Disable Units Lock first",http_status:423};
+  if(typeof body.enabled==="boolean") await setState(env,"unit_lock_state",JSON.stringify({...unit,restore_autoshift_on_unlock:false}));
+  const cfg=normalizeAutoshiftConfig({...normalizeAutoshiftConfig(await readJson(env,"autoshift_cfg")),...body});
+  await setState(env,"autoshift_cfg",JSON.stringify(cfg));
+  let pending=false;
+  const state=normalizeAutoshiftState(await readJson(env,"autoshift_state"));
+  if(!cfg.enabled && state.phase!=="idle") {
+    pending=true;
+    await setState(env,"autoshift_state",JSON.stringify({...state,phase:"stopping",stop_reason:"disabled",until_ts:null}));
+    try {
+      const confirmed=await setTuyaRelayAndConfirm(env,false);
+      await setState(env,"tuya_status",JSON.stringify(confirmed));
+      await setState(env,"relay_state","0"); await setState(env,"relay_last_known","0");
+      await setState(env,"autoshift_state",JSON.stringify({...normalizeAutoshiftState(null),last_end_ts:now}));
+      pending=false;
+    } catch {}
+  }
+  await logEvent(env,"autoshift","Auto-shift settings saved",cfg.enabled?"Enabled":"Disabled");
+  return {success:true,...cfg,cancellation_pending:pending};
 }
 
 async function applyRelay(env: any, body: any) {
@@ -107,7 +132,7 @@ export async function processControllerCommands(env: any) {
       await env.zeekay_power_db.prepare(`UPDATE controller_commands SET status='running' WHERE id=?`).bind(row.id).run();
       try {
         const payload = JSON.parse(row.payload);
-        result = row.kind === "unit-lock" ? await applyUnitLockSettings(env, payload) : await applyRelay(env, payload);
+        result = row.kind === "unit-lock" ? await applyUnitLockSettings(env, payload) : row.kind === "autoshift" ? await applyAutoshiftSettings(env,payload) : await applyRelay(env, payload);
       } catch {
         result = { success: false, message: "Controller command could not be confirmed; refresh status before retrying", http_status: 502 };
       }

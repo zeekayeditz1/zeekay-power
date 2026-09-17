@@ -60,16 +60,19 @@ final class NotificationHelper {
     }
 
     static synchronized void processStatus(Context context, JSONObject status) {
-        boolean grid = status.optBoolean("wapda_available", false);
-        boolean relay = status.optBoolean("relay_state", false);
+        android.content.SharedPreferences prefs = PreferenceStore.raw(context);
+        boolean gridKnown=status.optBoolean("breaker_online",false);
+        boolean relayKnown=status.optBoolean("relay_known",false) && !status.isNull("relay_state");
+        boolean grid=gridKnown?status.optBoolean("wapda_available",false):prefs.getBoolean(LAST_GRID,false);
+        Object relayValue=status.opt("relay_state");
+        boolean relay=relayKnown?(relayValue instanceof Number?((Number)relayValue).intValue()==1:Boolean.TRUE.equals(relayValue)):prefs.getBoolean(LAST_RELAY,false);
         boolean locked = status.optBoolean("unit_lock_locked", false);
-        boolean autoshift = status.optBoolean("autoshift_charging", false);
         boolean stale = status.optBoolean("stale", true) || !status.optBoolean("data_available", true);
+        boolean autoshift = !stale && gridKnown ? status.optBoolean("autoshift_charging", false) : prefs.getBoolean(LAST_AUTOSHIFT,false);
         double soc = status.optDouble("battery_soc", Double.NaN);
 
-        android.content.SharedPreferences prefs = PreferenceStore.raw(context);
         if (!prefs.getBoolean(STATE_INITIALIZED, false)) {
-            storeStatus(prefs, grid, relay, locked, autoshift, stale, soc);
+            storeStatus(prefs, grid, relay, locked, autoshift, stale, soc,gridKnown,relayKnown);
             return;
         }
 
@@ -80,13 +83,13 @@ final class NotificationHelper {
         boolean previousStale = prefs.getBoolean(LAST_STALE, stale);
         float previousSoc = prefs.getFloat(LAST_SOC, Float.NaN);
 
-        if (PreferenceStore.grid(context) && grid != previousGrid) {
+        if (gridKnown && prefs.contains(LAST_GRID) && PreferenceStore.grid(context) && grid != previousGrid) {
             notify(context, 1101, "WAPDA " + (grid ? "is available" : "is unavailable"),
                     grid ? "Grid power has returned. Open ZeeKay Power for the live reading."
                             : "Grid power is no longer available. Cloud automation will keep monitoring it.", CHANNEL_ALERTS);
         }
 
-        if (PreferenceStore.automation(context) && relay != previousRelay) {
+        if (relayKnown && prefs.contains(LAST_RELAY) && PreferenceStore.automation(context) && relay != previousRelay) {
             notify(context, 1102, "WAPDA relay turned " + (relay ? "ON" : "OFF"),
                     relay ? "The mains relay is now closed." : "The mains relay is now open.", CHANNEL_ALERTS);
         }
@@ -102,7 +105,7 @@ final class NotificationHelper {
         }
 
         int threshold = PreferenceStore.batteryLevel(context);
-        if (PreferenceStore.battery(context) && !Double.isNaN(soc)
+        if (!stale && PreferenceStore.battery(context) && !Double.isNaN(soc)
                 && !Float.isNaN(previousSoc) && previousSoc > threshold && soc <= threshold) {
             notify(context, 1105, "Battery is low", "Battery charge dropped to " + Math.round(soc) + "%. Open the dashboard to review WAPDA and auto-shift status.", CHANNEL_ALERTS);
         }
@@ -111,7 +114,7 @@ final class NotificationHelper {
             notify(context, 1106, "Power data is delayed", "The dashboard has not received a fresh hardware sample. Background checks will continue.", CHANNEL_STATUS);
         }
 
-        storeStatus(prefs, grid, relay, locked, autoshift, stale, soc);
+        storeStatus(prefs, grid, relay, locked, autoshift, stale, soc,gridKnown,relayKnown);
         recordSuccess(context);
     }
 
@@ -142,14 +145,14 @@ final class NotificationHelper {
     }
 
     private static void storeStatus(android.content.SharedPreferences prefs, boolean grid, boolean relay,
-                                    boolean locked, boolean autoshift, boolean stale, double soc) {
+                                    boolean locked, boolean autoshift, boolean stale, double soc,boolean gridKnown,boolean relayKnown) {
         android.content.SharedPreferences.Editor editor = prefs.edit()
                 .putBoolean(STATE_INITIALIZED, true)
-                .putBoolean(LAST_GRID, grid)
-                .putBoolean(LAST_RELAY, relay)
                 .putBoolean(LAST_LOCK, locked)
                 .putBoolean(LAST_AUTOSHIFT, autoshift)
                 .putBoolean(LAST_STALE, stale);
+        if(gridKnown) editor.putBoolean(LAST_GRID,grid);
+        if(relayKnown) editor.putBoolean(LAST_RELAY,relay);
         if (!Double.isNaN(soc)) editor.putFloat(LAST_SOC, (float) soc);
         editor.apply();
     }

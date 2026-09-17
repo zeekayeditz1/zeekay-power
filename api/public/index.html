@@ -515,7 +515,7 @@
       <h3>WAPDA Control</h3>
       <div class="relay-row">
         <div><div class="label">Mains relay</div></div>
-        <div class="toggle" id="relayToggle" role="switch" aria-checked="false" tabindex="0"><i></i></div>
+        <span id="relayExplicit" hidden><button class="btn" id="relayOnBtn">ON</button> <button class="btn" id="relayOffBtn">OFF</button></span><div class="toggle" id="relayToggle" role="switch" aria-checked="false" tabindex="0"><i></i></div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
         <span class="chip">Relay <b id="relayState">—</b></span>
@@ -704,7 +704,7 @@
     nativePost("status",{status:{
       battery_soc:s.battery_soc,battery_voltage:s.battery_voltage,
       wapda_available:!!s.wapda_available,wapda_active:!!s.wapda_active,
-      relay_state:!!s.relay_state,unit_lock_locked:!!s.unit_lock_locked,
+      relay_state:s.relay_state,relay_known:s.relay_known,breaker_online:s.breaker_online,unit_lock_locked:!!s.unit_lock_locked,
       autoshift_charging:!!s.autoshift_charging,autoshift_stop_reason:s.autoshift_stop_reason||null,
       stale:!!s.stale,data_available:s.data_available!==false,updated_at:s.updated_at||null
     }});
@@ -884,7 +884,7 @@
     if($("tInverterVolts")) $("tInverterVolts").textContent = fmt(s.inverter_voltage,1);
     if($("tInverterCurrent")) $("tInverterCurrent").textContent = fmt(s.inverter_current,2);
     if($("tFreq")) $("tFreq").textContent = fmt(s.frequency,1);
-    if($("tWapdaToday")) $("tWapdaToday").textContent = fmt(s.wapda_today_kwh,2);
+    if($("tWapdaToday")) $("tWapdaToday").textContent = fmt(s.inverter_grid_today_kwh,2);
     if($("tMeter")) $("tMeter").textContent = fmt(s.breaker_energy_kwh,2);
     if($("tPvToday")) $("tPvToday").textContent = fmt(s.pv_today_kwh,2);
     if($("tPvPeak")) $("tPvPeak").textContent = fmt(s.solar_peak_today,0);
@@ -894,13 +894,15 @@
     tg.classList.toggle("busy", !!s.unit_lock_locked);
     tg.setAttribute("aria-checked", on?"true":"false");
     tg.title = s.unit_lock_locked ? "Units Lock is active; WAPDA must stay OFF until 8 AM" : "Switch WAPDA relay";
-    $("relayState").textContent = on?"ON":"OFF";
+    $("relayState").textContent = s.relay_known===true?(on?"ON":"OFF"):"UNKNOWN";
+    $("relayExplicit").hidden=s.relay_known===true;
+    tg.hidden=s.relay_known!==true;
     $("relayMode").textContent = s.mode||"auto";
     $("relayUpd").textContent = ago(s.updated_at);
     const wapdaStatusEl = $("sgWapda");
     wapdaStatusEl.textContent = s.breaker_online!==true ? "Unverified · Meter offline" : wapdaAvailable ? (wapdaActive?"Available · Active":"Available · Off") : "Unavailable · Off";
     wapdaStatusEl.className = "sgv "+(wapdaActive?"ok":wapdaAvailable?"hot":"bad");
-    statusWord($("sgRelay"), on, ["Closed","Open"]);
+    if(s.relay_known===true) statusWord($("sgRelay"), on, ["Closed","Open"]); else $("sgRelay").textContent="Unknown";
     statusWord($("sgSolar"), (s.solar_power||0)>5, ["Generating","Idle"]);
     const bel=$("sgBatt");
     if(bel){ const st=s.battery_state||"idle"; bel.textContent=st.charAt(0).toUpperCase()+st.slice(1); bel.className="sgv "+(st==="charging"?"ok":st==="discharging"?"warn":"off"); }
@@ -927,7 +929,7 @@
     $("ulUsed").textContent=fmt(ulUsed,2);
     $("ulLimit").textContent=fmt(ulLimit,2);
     $("ulWarning").textContent=fmt(ulWarning,2);
-    if(document.activeElement!==$("ulLimitInput")) $("ulLimitInput").value=String(ulLimit);
+    if(!ulDirty && document.activeElement!==$("ulLimitInput")) $("ulLimitInput").value=String(ulLimit);
     $("ulRemaining").textContent=fmt(Math.max(0,ulLimit-ulUsed),2);
     $("ulBar").style.width=Math.max(0,Math.min(100,ulLimit>0?ulUsed/ulLimit*100:0))+"%";
     $("ulUnlock").textContent=ulLocked?fmtTime(s.unit_lock_unlock_at):"Not locked";
@@ -950,6 +952,7 @@
       ulBadge="WINDOW DONE";
       ulMsg="Last night: "+fmt(ulUsed,2)+" kWh · below limit.";
     }
+    if(s.unit_lock_partial && ulEnabled) ulMsg+=" Partial reading.";
     $("ulBadge").textContent=ulBadge;
     $("ulStatus").textContent=ulMsg;
     setConn(s.stale || s.data_available===false ? "warn" : "live");
@@ -957,7 +960,7 @@
   }
 
   /* ---------------- editable Units Lock limit ---------------- */
-  let unitLockBusy=false;
+  let unitLockBusy=false, ulDirty=false;
   let unitLockEnabled=true;
   async function saveUnitLock(enabledOverride){
     if(unitLockBusy) return;
@@ -971,7 +974,7 @@
     btn.disabled=true; btn.textContent="Saving…";
     try{
       const r=await controllerAction("/api/unit-lock",{enabled:nextEnabled,...(validLimit?{limit_kwh:limit}:{})});
-      unitLockEnabled=!!r.enabled;
+      unitLockEnabled=!!r.enabled; ulDirty=false;
       toast(!r.enabled?"Units Lock is off":r.will_lock_next_tick?"Settings saved — locking WAPDA":"Units Lock settings saved","ok");
       await Promise.all([loadStatus(),loadAutoshift(),loadEvents()]);
     }catch(e){ toast(e.message||"Could not save Units Lock settings","err"); if(lastStatus)render(lastStatus); }
@@ -979,21 +982,21 @@
   }
 
   /* ---------------- auto-shift-to-WAPDA settings ---------------- */
-  let asBusy = false;
+  let asBusy = false, asDirty=false;
   function fmtTime(iso){ if(!iso) return "--"; try{ return new Date(iso).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}); }catch(e){ return "--"; } }
   async function loadAutoshift(){
     try{
       const r = await api("/api/autoshift");
       if(!r || r.success===false) return;
-      $("asToggle").classList.toggle("on", !!r.enabled);
+      if(!asDirty) $("asToggle").classList.toggle("on", !!r.enabled);
       $("asToggle").classList.toggle("busy", !!r.units_locked);
       $("asToggle").setAttribute("aria-checked", r.enabled?"true":"false");
       $("asToggle").title = r.units_locked ? "Units Lock controls auto-shift until 8 AM" : "Enable or disable auto-shift";
-      if(document.activeElement!==$("asThreshold")) $("asThreshold").value = r.threshold_v;
-      if(document.activeElement!==$("asDuration")) $("asDuration").value = r.duration_min;
-      if(document.activeElement!==$("asPvStop")) $("asPvStop").value = r.pv_stop_w;
-      if(document.activeElement!==$("asMinOn")) $("asMinOn").value = r.min_on_min;
-      if(document.activeElement!==$("asCooldown")) $("asCooldown").value = r.cooldown_min;
+      if(!asDirty && document.activeElement!==$("asThreshold")) $("asThreshold").value = r.threshold_v;
+      if(!asDirty && document.activeElement!==$("asDuration")) $("asDuration").value = r.duration_min;
+      if(!asDirty && document.activeElement!==$("asPvStop")) $("asPvStop").value = r.pv_stop_w;
+      if(!asDirty && document.activeElement!==$("asMinOn")) $("asMinOn").value = r.min_on_min;
+      if(!asDirty && document.activeElement!==$("asCooldown")) $("asCooldown").value = r.cooldown_min;
       const holdNote = r.min_on_until && new Date(r.min_on_until) > new Date()
         ? " · relay held closed until "+fmtTime(r.min_on_until)+" (minimum ON)" : "";
       const coolNote = r.cooldown_until && new Date(r.cooldown_until) > new Date()
@@ -1002,7 +1005,7 @@
       if(r.units_locked) msg = "Disabled by Units Lock — "+fmt(r.unit_lock_limit_kwh||6,2)+" kWh was reached, so WAPDA and auto-shift stay OFF until "+fmtTime(r.unit_lock_unlock_at)+", even if the battery becomes empty";
       else if(r.stopping) msg = "Turning WAPDA off…";
       else if(r.charging) msg = "Charging now — WAPDA confirmed present, held until "+fmtTime(r.until)+" at the latest (triggered at "+fmt(r.trigger_voltage,1)+" V) — ends sooner if PV reaches "+fmt(r.pv_stop_w,0)+" W";
-      else if(r.active) msg = "Waiting for WAPDA — relay closed, battery at "+fmt(r.trigger_voltage,1)+" V, rechecking every minute for real grid power (a full "+r.duration_min+"-min charge starts the instant it's confirmed)";
+      else if(r.active) msg = "Waiting for WAPDA — relay closed, battery at "+fmt(r.trigger_voltage,1)+" V, rechecking every minute for real grid power (remaining charging time resumes when confirmed)";
       else if(r.enabled) msg = "Watching, 6 PM–6 AM only — closes WAPDA relay if battery drops to "+fmt(r.threshold_v,1)+" V, waits for real grid before charging, ends early once PV hits "+fmt(r.pv_stop_w,0)+" W";
       else msg = "Disabled — battery voltage will not auto-switch WAPDA";
       if(r.enabled) msg += (r.active ? holdNote : coolNote);
@@ -1019,9 +1022,10 @@
       const pv_stop_w = parseInt($("asPvStop").value,10);
       const min_on_min = parseInt($("asMinOn").value,10);
       const cooldown_min = parseInt($("asCooldown").value,10);
-      const r = await api("/api/autoshift",{method:"POST",body:JSON.stringify({enabled,threshold_v,duration_min,pv_stop_w,min_on_min,cooldown_min})});
+      const r = await controllerAction("/api/autoshift",{enabled,threshold_v,duration_min,pv_stop_w,min_on_min,cooldown_min});
+      asDirty=false;
       if(r && r.success===false) throw new Error(r.error||r.message||"save failed");
-      toast("Auto-shift settings saved","ok");
+      toast(r.cancellation_pending?"Settings saved · waiting to confirm OFF":"Auto-shift settings saved","ok");
       await loadAutoshift(); loadEvents();
     }catch(e){ toast(e.message||"Could not save settings","err"); }
     finally{ btn.disabled=false; btn.textContent=orig; asBusy=false; }
@@ -1103,10 +1107,13 @@
 
 
   /* ---------------- SOC chart (vanilla canvas) ---------------- */
+  let chartPoints=[];
   function drawChart(points){
+    chartPoints=points||[];
     const cv=$("socChart");
     const dpr=window.devicePixelRatio||1;
     const w=cv.clientWidth, h=220;
+    if(w<=0) return;
     cv.width=w*dpr; cv.height=h*dpr; cv.style.height=h+"px";
     const ctx=cv.getContext("2d"); ctx.setTransform(dpr,0,0,dpr,0,0);
     ctx.clearRect(0,0,w,h);
@@ -1114,7 +1121,8 @@
     const padL=34,padR=10,padT=14,padB=22;
     const iw=w-padL-padR, ih=h-padT-padB;
     const minY=0,maxY=100;
-    const xAt=(i)=>padL+ (points.length===1?iw/2: iw*i/(points.length-1));
+    const start=Date.parse(points[0].t), end=Date.parse(points[points.length-1].t);
+    const xAt=(i)=>padL+(end>start?iw*(Date.parse(points[i].t)-start)/(end-start):iw/2);
     const yAt=(v)=>padT+ ih*(1-(v-minY)/(maxY-minY));
     // grid + labels
     ctx.font="10px "+getComputedStyle(document.body).fontFamily;
@@ -1126,17 +1134,9 @@
       ctx.fillStyle="rgba(135,148,173,0.7)"; ctx.textAlign="right";
       ctx.fillText(g, padL-8, y);
     });
-    // area fill
-    const grad=ctx.createLinearGradient(0,padT,0,padT+ih);
-    grad.addColorStop(0,"rgba(55,245,181,0.30)");
-    grad.addColorStop(1,"rgba(55,245,181,0.0)");
+    // Draw separate segments for gaps in telemetry.
     ctx.beginPath();
-    points.forEach((p,i)=>{const x=xAt(i),y=yAt(p.soc); i?ctx.lineTo(x,y):ctx.moveTo(x,y);});
-    ctx.lineTo(xAt(points.length-1),padT+ih); ctx.lineTo(xAt(0),padT+ih); ctx.closePath();
-    ctx.fillStyle=grad; ctx.fill();
-    // line
-    ctx.beginPath();
-    points.forEach((p,i)=>{const x=xAt(i),y=yAt(p.soc); i?ctx.lineTo(x,y):ctx.moveTo(x,y);});
+    points.forEach((p,i)=>{const x=xAt(i),y=yAt(p.soc); i && Date.parse(p.t)-Date.parse(points[i-1].t)<=180000?ctx.lineTo(x,y):ctx.moveTo(x,y);});
     ctx.strokeStyle="#37f5b5"; ctx.lineWidth=2.2; ctx.lineJoin="round"; ctx.stroke();
     // last point
     const lx=xAt(points.length-1), ly=yAt(points[points.length-1].soc);
@@ -1146,7 +1146,7 @@
     ctx.fillStyle="rgba(135,148,173,0.7)"; ctx.textAlign="left"; ctx.textBaseline="alphabetic";
     if(points[0].t){ ctx.fillText(new Date(points[0].t).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}), padL, h-6); }
     ctx.textAlign="right";
-    if(points[points.length-1].t){ ctx.fillText("now", w-padR, h-6); }
+    if(points[points.length-1].t){ ctx.fillText(new Date(points[points.length-1].t).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}), w-padR, h-6); }
   }
 
   async function loadHistory(){
@@ -1248,9 +1248,9 @@
   }
   $("relayToggle").addEventListener("click", ()=>{
     if(!lastStatus) return;
-    setRelay(!lastStatus.relay_state);
+    if(lastStatus.relay_known===true) setRelay(!lastStatus.relay_state);
   });
-  $("relayToggle").addEventListener("keydown",(e)=>{ if(e.key===" "||e.key==="Enter"){e.preventDefault(); if(lastStatus) setRelay(!lastStatus.relay_state);} });
+  $("relayToggle").addEventListener("keydown",(e)=>{ if(e.key===" "||e.key==="Enter"){e.preventDefault(); if(lastStatus?.relay_known===true) setRelay(!lastStatus.relay_state);} });
 
   $("pollBtn").addEventListener("click", async ()=>{
     const b=$("pollBtn"); b.disabled=true; const o=b.textContent; b.textContent="⟳ Polling…";
@@ -1266,17 +1266,22 @@
     $("appNav").querySelectorAll("button").forEach(b=>b.classList.toggle("active",b===btn));
     document.querySelectorAll(".view-item").forEach(el=>el.classList.toggle("view-active",el.dataset.view===currentView));
     window.scrollTo({top:0,behavior:"smooth"});
+    if(currentView==="overview") requestAnimationFrame(()=>drawChart(chartPoints));
     if(currentView==="energy"){loadHistory();loadCycles();loadDischarge();}
     if(currentView==="control"){loadAutoshift();loadApiKeys();}
     if(currentView==="activity"){loadEvents();nativePost("get_state");}
   });
   document.addEventListener("visibilitychange",()=>{
-    if(shouldPoll()) { loadStatus(); loadEvents(); loadAutoshift(); }
+    if(shouldPoll()) { loadStatus(); loadEvents(); loadAutoshift(); drawChart(chartPoints); }
   });
-  $("asToggle").addEventListener("click", ()=>{ if($("asToggle").classList.contains("busy")){ toast("Units Lock controls auto-shift until 8 AM","err"); return; } $("asToggle").classList.toggle("on"); });
-  $("asToggle").addEventListener("keydown",(e)=>{ if(e.key===" "||e.key==="Enter"){ e.preventDefault(); if($("asToggle").classList.contains("busy")){ toast("Units Lock controls auto-shift until 8 AM","err"); return; } $("asToggle").classList.toggle("on"); } });
+  $("asToggle").addEventListener("click", ()=>{ if($("asToggle").classList.contains("busy")){ toast("Units Lock controls auto-shift until 8 AM","err"); return; } asDirty=true; $("asToggle").classList.toggle("on"); });
+  $("asToggle").addEventListener("keydown",(e)=>{ if(e.key===" "||e.key==="Enter"){ e.preventDefault(); if($("asToggle").classList.contains("busy")){ toast("Units Lock controls auto-shift until 8 AM","err"); return; } asDirty=true; $("asToggle").classList.toggle("on"); } });
   $("ulToggle").addEventListener("click",()=>saveUnitLock(!unitLockEnabled));
   $("ulToggle").addEventListener("keydown",(e)=>{if(e.key===" "||e.key==="Enter"){e.preventDefault();saveUnitLock(!unitLockEnabled);}});
+  $("ulLimitInput").addEventListener("input",()=>ulDirty=true);
+  ["asThreshold","asDuration","asPvStop","asMinOn","asCooldown"].forEach(id=>$(id).addEventListener("input",()=>asDirty=true));
+  $("relayOnBtn").addEventListener("click",()=>setRelay(true));
+  $("relayOffBtn").addEventListener("click",()=>setRelay(false));
   $("ulSaveBtn").addEventListener("click", saveUnitLock);
   $("asSaveBtn").addEventListener("click", saveAutoshift);
   $("akCreateBtn").addEventListener("click", createApiKeyUI);
@@ -1298,7 +1303,7 @@
     btn.classList.add("active"); chartRange=+btn.dataset.h; loadHistory();
   });
 
-  let rz; window.addEventListener("resize", ()=>{ clearTimeout(rz); rz=setTimeout(loadHistory,150); });
+  let rz; window.addEventListener("resize", ()=>{ clearTimeout(rz); rz=setTimeout(()=>drawChart(chartPoints),150); });
 
   /* ---------------- init ---------------- */
   window.addEventListener("online",()=>{document.body.classList.remove("is-offline");if(token)loadStatus();});

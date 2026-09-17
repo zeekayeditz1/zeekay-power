@@ -1,3 +1,4 @@
+import { runAutomationTick } from "./automation";
 import { getState, setState, acquireTickLock, releaseTickLock, ensureTables } from "./dashboardStore";
 import { BatteryEnergySample, buildDischargeHistory, dischargeInterval, dischargeWindow, localEnergyDate, meterInterval, MeterEnergySample, DAY_S, billingCycleStart, billingCycleEnd } from "./energy";
 import { TuyaStatus, fetchTuyaStatus, fetchTuyaEnergyDay, fetchTuyaEnergyCapabilities, tuyaConfigured } from "./tuya";
@@ -33,7 +34,11 @@ export async function recordDischargeSample(env:any,sample:BatteryEnergySample) 
 
 export async function wapdaEnergyDays(env:any) {
   const rows:any=await env.zeekay_power_db.prepare(`SELECT *,
-    CASE WHEN reported_kwh IS NOT NULL THEN reported_kwh+MAX(0,observed_kwh-reported_observed_kwh) ELSE observed_kwh END AS kwh
+    CASE WHEN reported_kwh IS NOT NULL THEN
+      CASE WHEN reported_at >= (unixepoch(date||'T00:00:00Z')+86400-18000)
+        THEN MAX(observed_kwh,reported_kwh)
+        ELSE MAX(observed_kwh,reported_kwh+MAX(0,observed_kwh-reported_observed_kwh)) END
+      ELSE observed_kwh END AS kwh
     FROM wapda_daily_energy ORDER BY date`).all();
   return rows.results??[];
 }
@@ -83,7 +88,7 @@ export async function dischargeDays(env:any,now:number,days=7) {
     const coverage=row&&elapsed>0 ? Math.min(100,row.covered_s/elapsed*100) : 0;
     history.push({date:dischargeWindow(start).date,window_start:new Date(start*1000).toISOString(),window_end:new Date((start+DAY_S)*1000).toISOString(),
       discharge_kwh:row?Math.round(row.kwh*1000)/1000:null,coverage_pct:Math.round(coverage*10)/10,
-      partial:!row||coverage<95,is_current:i===0,source:"battery_dc_discharge_only"});
+      partial:!row||elapsed-row.covered_s>180,is_current:i===0,source:"battery_dc_discharge_only"});
   }
   return history;
 }
@@ -111,13 +116,16 @@ export async function recordWapdaSample(env:any,tuya:TuyaStatus,ts:number) {
 export async function runWapdaEnergyTick(env:any) {
   await ensureTables(env);
   if(!tuyaConfigured(env)) return;
-  const tuya=await fetchTuyaStatus(env);
+  let tuya:TuyaStatus|null=null;
+  try { tuya=await fetchTuyaStatus(env); } catch {}
   const now=Math.floor(Date.now()/1000), lock=await acquireTickLock(env,now,180);
   if(lock==null) return;
   try {
-    await recordWapdaSample(env,tuya,now);
-    await setState(env,"tuya_status",JSON.stringify(tuya));
-    await setState(env,"tuya_reachable","1");
+    if(tuya) await recordWapdaSample(env,tuya,now);
+    const controls=await runAutomationTick(env,tuya,now);
+    tuya=controls.tuya;
+    if(tuya) await setState(env,"tuya_status",JSON.stringify(tuya));
+    await setState(env,"tuya_reachable",tuya?"1":"0");
   } finally { await releaseTickLock(env,lock); }
 }
 
@@ -131,24 +139,27 @@ export async function syncTuyaEnergyHistory(env:any) {
   const previousStatus=JSON.parse(await getState(env,"tuya_energy_sync_status","{}"));
   if(now-lastAttempt<(previousStatus.status==="unavailable"?300:45)) return;
   await setState(env,"tuya_energy_sync_attempt",String(now));
-  const start=billingCycleStart(today);
+  const start=localEnergyDate(now-90*DAY_S);
   const rows:any=await env.zeekay_power_db.prepare(`SELECT date,reported_at FROM wapda_daily_energy WHERE date>=? AND date<=?`).bind(start,today).all();
   const known=new Map<string,number>((rows.results??[]).map((r:any)=>[r.date,Number(r.reported_at??0)]));
   const dates:string[]=[];
-  for(let date=start;date<=today;date=new Date(Date.parse(date+"T00:00:00Z")+DAY_S*1000).toISOString().slice(0,10)) {
+  for(let date=start;date<today;date=new Date(Date.parse(date+"T00:00:00Z")+DAY_S*1000).toISOString().slice(0,10)) {
     const reportedAt=known.get(date)??0;
     const dayEnd=Date.parse(date+"T00:00:00Z")/1000+DAY_S-5*3600;
     // A report fetched during its day is provisional. Fetch it once again
     // after midnight so the closing minutes are not lost forever.
-    if(!reportedAt || (date<today && reportedAt<dayEnd) || (date===today && now-reportedAt>900)) dates.push(date);
+    if(!reportedAt || reportedAt<dayEnd) dates.push(date);
   }
+  // Closed days only: reports cannot race live increments from today.
+  dates.sort((a,b)=>b.localeCompare(a));
   for(const date of dates.slice(0,6)) {
     try {
+      const baseline:any=await env.zeekay_power_db.prepare(`SELECT observed_kwh FROM wapda_daily_energy WHERE date=?`).bind(date).first();
       const kwh=await fetchTuyaEnergyDay(env,date);
       await env.zeekay_power_db.prepare(`INSERT INTO wapda_daily_energy (date,reported_kwh,reported_at) VALUES (?,?,?)
         ON CONFLICT(date) DO UPDATE SET reported_kwh=excluded.reported_kwh,reported_at=excluded.reported_at,
-        reported_observed_kwh=wapda_daily_energy.observed_kwh`)
-        .bind(date,kwh,now).run();
+        reported_observed_kwh=?`)
+        .bind(date,kwh,now,baseline?.observed_kwh??0).run();
       await setState(env,"tuya_energy_sync_status",JSON.stringify({status:"ok",last_success:now,last_date:date}));
     } catch(error:any) {
       await setState(env,"tuya_energy_sync_status",JSON.stringify({status:"unavailable",last_attempt:now,message:error?.message??"Tuya energy history unavailable"}));

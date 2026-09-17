@@ -89,6 +89,18 @@ export interface SemsSnapshot {
 }
 
 /** Pull one live reading. p_chg: POSITIVE = charging (SEMS reports negative for charge). */
+export function hardwareSampleTime(inv:any,full:any):number|null {
+  const value=full.last_time??inv.last_time??full.lastTime??inv.lastTime;
+  if(value==null||value==="") return null;
+  if(typeof value==="number") return value>1e12?Math.floor(value/1000):Math.floor(value);
+  const asp=/^\/Date\((\d+)(?:[+-]\d{4})?\)\/$/.exec(String(value));
+  if(asp) return Math.floor(Number(asp[1])/1000);
+  let text=String(value).trim().replace(/\//g,"-").replace(" ","T");
+  const english=/^(\d{1,2})-(\d{1,2})-(\d{4})T(\d{2}:\d{2}(?::\d{2})?)$/.exec(text);
+  if(english) text=`${english[3]}-${english[1].padStart(2,"0")}-${english[2].padStart(2,"0")}T${english[4]}`;
+  if(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(text)) text+="+05:00";
+  const ms=Date.parse(text); return Number.isFinite(ms)?Math.floor(ms/1000):null;
+}
 export async function fetchSemsSnapshot(env: Env): Promise<SemsSnapshot> {
   let tok = await getToken(env);
   let d = await monitorCall(tok, env.SEMS_STATION_ID);
@@ -99,11 +111,14 @@ export async function fetchSemsSnapshot(env: Env): Promise<SemsSnapshot> {
   const inv = data.inverter?.[0] || {};
   const full = inv.invert_full || {};
   const pf = data.powerflow || {};
+  const sampleTs=hardwareSampleTime(inv,full),now=Math.floor(Date.now()/1000);
+  await setState(env as any,"sems_telemetry_health",JSON.stringify({sample_ts:sampleTs,device_status:inv.status??null,has_device_time:sampleTs!=null}));
+  if(inv.status===-1||inv.status==="-1"||inv.online===false||sampleTs==null||now-sampleTs>180||sampleTs>now+30) throw new Error("Inverter hardware reading is unavailable or delayed");
   const power = numOf(full.total_pbattery ?? inv.battery_power);
   return {
     v: numOf(full.vbattery1),
     p_chg: power == null ? null : -power,
-    ts: Math.floor(Date.now() / 1000),
+    ts: sampleTs,
     bms_soc: numOf(full.soc ?? inv.soc ?? pf.soc),
     solar_power: numOf(pf.pv),
     load_power: numOf(pf.load),

@@ -61,6 +61,7 @@ export interface AutoshiftConfig {
 }
 
 export interface AutoshiftState {
+  remaining_charge_s?: number | null;
   phase: AutoshiftPhase;
   trigger_ts: number | null;
   trigger_voltage: number | null;
@@ -88,6 +89,8 @@ export interface GridSignals {
 }
 
 export interface AutoshiftInput {
+  relayKnown?: boolean;
+  batteryCharging?: boolean | null;
   nowTs: number;
   batteryVoltage: number;
   pvPower: number;
@@ -162,7 +165,7 @@ export function isMainsAvailable(signals: GridSignals): boolean {
 /** Is WAPDA actually feeding the house right now? Mains present AND the
  *  breaker closed AND the breaker reachable. */
 export function isGridConnected(signals: GridSignals): boolean {
-  return signals.relayOn && signals.tuyaOnline !== false && isMainsAvailable(signals);
+  return signals.relayOn && signals.tuyaOnline === true && (signals.tuyaGridPower ?? 0) > 20;
 }
 
 /** 18:00 through 05:59, Pakistan local time (UTC+5, no DST). */
@@ -241,6 +244,7 @@ export function normalizeAutoshiftState(value: any): AutoshiftState {
 
   return {
     phase,
+    remaining_charge_s: finiteOrNull(raw.remaining_charge_s),
     trigger_ts: finiteOrNull(raw.trigger_ts),
     trigger_voltage: finiteOrNull(raw.trigger_voltage),
     charge_start_ts: finiteOrNull(raw.charge_start_ts),
@@ -274,6 +278,7 @@ function stopReason(
   // past 06:00 into daylight, and must not re-close the relay on its way out.
   if (!input.inNightWindow) return "window_ended";
   if (input.pvPower >= cfg.pv_stop_w) return "pv_recovered";
+  if(state.remaining_charge_s===0) return "duration_complete";
   if (state.phase === "charging" && input.nowTs >= (state.until_ts ?? 0)) return "duration_complete";
   return null;
 }
@@ -313,10 +318,11 @@ export function planAutoshift(
   input: AutoshiftInput
 ): AutoshiftPlan {
   const normalized = normalizeAutoshiftState(current);
+  const relayKnown = input.relayKnown !== false;
 
   // ---- reconcile the stored state with what the breaker actually reports ----
   const state: AutoshiftState = { ...normalized };
-  if (state.phase !== "idle") {
+  if (state.phase !== "idle" && relayKnown) {
     if (input.relayOn && state.phase !== "stopping") {
       // Our ON has landed (or the breaker was already closed): remember when,
       // and stop counting retries.
@@ -331,10 +337,10 @@ export function planAutoshift(
 
   // ---- stopping: keep asking for OFF until the breaker reads back open ----
   if (state.phase === "stopping") {
-    if (!input.relayOn) {
+    if (relayKnown && !input.relayOn) {
       return { state: idleState(state, input.nowTs), command: null, transition: "stopped" };
     }
-    if (!mayRetry(state, input)) return { state, command: null, transition: null };
+    if (!relayKnown || !mayRetry(state, input)) return { state, command: null, transition: null };
     return issueCommand(state, input, "off", null);
   }
 
@@ -350,7 +356,7 @@ export function planAutoshift(
     // ON/OFF bursts.
     const stopAlreadyHolds = input.pvPower >= config.pv_stop_w;
 
-    if (wantsPower && cooledDown && !stopAlreadyHolds && !input.relayOn) {
+    if (relayKnown && wantsPower && cooledDown && !stopAlreadyHolds && !input.relayOn) {
       return issueCommand(
         {
           ...EMPTY_AUTOSHIFT_STATE,
@@ -386,12 +392,12 @@ export function planAutoshift(
       };
     }
     const stopping: AutoshiftState = { ...state, phase: "stopping", until_ts: null, stop_reason: reason };
-    if (!mayRetry(state, input)) return { state: stopping, command: null, transition: "stop_requested" };
+    if (!relayKnown || !mayRetry(state, input)) return { state: stopping, command: null, transition: "stop_requested" };
     return issueCommand(stopping, input, "off", "stop_requested");
   }
 
   // ---- Rule 3: the breaker is open but we already had it closed this cycle ----
-  if (!input.relayOn && state.relay_closed_ts != null) {
+  if (relayKnown && !input.relayOn && state.relay_closed_ts != null) {
     return {
       state: { ...idleState(state, input.nowTs), stop_reason: "external_override" },
       command: null,
@@ -400,13 +406,14 @@ export function planAutoshift(
   }
 
   if (state.phase === "waiting_for_grid") {
-    if (input.gridConnected) {
+    if (relayKnown && input.gridConnected && input.batteryCharging !== false) {
       return {
         state: {
           ...state,
           phase: "charging",
           charge_start_ts: input.nowTs,
-          until_ts: input.nowTs + config.duration_min * 60,
+          until_ts: input.nowTs + (state.remaining_charge_s ?? config.duration_min * 60),
+          remaining_charge_s: null,
           stop_reason: null,
         },
         command: null,
@@ -415,16 +422,16 @@ export function planAutoshift(
     }
     // Relay open and never confirmed closed: our ON is still outstanding.
     // Retry on a backoff instead of once a minute forever.
-    if (!input.relayOn && mayRetry(state, input)) return issueCommand(state, input, "on", null);
+    if (relayKnown && !input.relayOn && mayRetry(state, input)) return issueCommand(state, input, "on", null);
     return { state, command: null, transition: null };
   }
 
   // ---- charging ----
-  if (!input.gridConnected) {
+  if (!relayKnown || !input.gridConnected || input.batteryCharging === false) {
     // Mains dropped while the breaker is still closed: pause the timer and
     // wait. No relay command — the relay is already where we want it.
     return {
-      state: { ...state, phase: "waiting_for_grid", charge_start_ts: null, until_ts: null },
+      state: { ...state, phase: "waiting_for_grid", remaining_charge_s: Math.max(0, (state.until_ts ?? input.nowTs) - input.nowTs), until_ts: null },
       command: null,
       transition: "grid_lost",
     };
