@@ -704,7 +704,7 @@
     nativePost("status",{status:{
       battery_soc:s.battery_soc,battery_voltage:s.battery_voltage,
       wapda_available:!!s.wapda_available,wapda_active:!!s.wapda_active,
-      relay_state:s.relay_state,relay_known:s.relay_known,breaker_online:s.breaker_online,unit_lock_locked:!!s.unit_lock_locked,
+      relay_state:s.relay_known===true?!!s.relay_state:null,relay_known:s.relay_known,breaker_online:s.breaker_online,unit_lock_locked:!!s.unit_lock_locked,
       autoshift_charging:!!s.autoshift_charging,autoshift_stop_reason:s.autoshift_stop_reason||null,
       stale:!!s.stale,data_available:s.data_available!==false,updated_at:s.updated_at||null
     }});
