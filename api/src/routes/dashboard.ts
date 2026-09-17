@@ -1,6 +1,7 @@
 import { enqueueControllerCommand, getControllerCommand, processControllerCommands, waitForControllerCommand } from "../services/controllerCommands";
 import { billingCycles, dischargeDays, wapdaEnergyDays, runWapdaEnergyTick } from "../services/energyStore";
 import { localEnergyDate } from "../services/energy";
+import { SEMS_MAX_SAMPLE_AGE_S } from "../services/telemetry";
 import { Hono } from "hono";
 import { authMiddleware, requireFullAccess } from "../middleware/auth";
 import {
@@ -122,7 +123,7 @@ async function snapshot(env: any) {
 
       const updatedMs = Date.parse(s.sample_at || s.updated_at || "");
       const sampleAgeS = Number.isFinite(updatedMs) ? Math.max(0, Math.floor((Date.now() - updatedMs) / 1000)) : null;
-      const stale = sampleAgeS == null || sampleAgeS > 180;
+      const stale = sampleAgeS == null || sampleAgeS > SEMS_MAX_SAMPLE_AGE_S;
 
       return {
         source: stale ? "stale" : "live",
@@ -170,6 +171,7 @@ async function snapshot(env: any) {
         grid_connected: gridConnected,
         wapda_available: wapdaAvailableFromTuya,
         wapda_active: wapdaActiveFromTuya,
+        wapda_connected: relayKnown && relayReal===1 && mainsAvailable,
         wapda_power: tuya ? wapdaPower : null,
         wapda_voltage: tuya?.grid_voltage ?? null,
         wapda_current: tuya?.grid_current ?? null,
@@ -216,7 +218,8 @@ async function snapshot(env: any) {
         autoshift_min_on_until: s.autoshift_min_on_until ?? null,
         autoshift_cooldown_until: s.autoshift_cooldown_until ?? null,
         sample_at: s.sample_at,
-        updated_at: s.updated_at,
+        updated_at: s.sample_at ?? s.updated_at,
+        relay_updated_at: tuya?.updated_at ?? null,
       };
     }
   } catch {}
@@ -267,6 +270,7 @@ async function snapshot(env: any) {
     }),
     wapda_available: wapdaAvailableFromTuya,
     wapda_active: wapdaActiveFromTuya,
+    wapda_connected: relayKnown && relayReal===1 && wapdaAvailableFromTuya,
     wapda_power: tuya ? wapdaPower : null,
     wapda_voltage: tuya?.grid_voltage ?? null,
     wapda_current: tuya?.grid_current ?? null,

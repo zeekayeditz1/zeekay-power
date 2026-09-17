@@ -1,6 +1,7 @@
+import { BATTERY_MAX_SAMPLE_GAP_S } from "./telemetry";
 export const DAY_S = 86400;
 export const PKT_S = 5 * 3600;
-export const MAX_DISCHARGE_GAP_S = 180;
+export const MAX_DISCHARGE_GAP_S = BATTERY_MAX_SAMPLE_GAP_S;
 export function localEnergyDate(ts: number) { return new Date((ts + PKT_S) * 1000).toISOString().slice(0, 10); }
 export function dischargeWindow(ts: number) {
   const start = Math.floor((ts - 12 * 3600) / DAY_S) * DAY_S + 12 * 3600;

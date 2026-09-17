@@ -16,6 +16,11 @@ describe("battery discharge only, 5PM Pakistan day",()=>{
     expect(dischargeInterval({ts:start,p:-600},{ts:start+60,p:-600})[0].kwh).toBeCloseTo(0.01);
     expect(dischargeInterval({ts:start,p:600},{ts:start+60,p:600})[0].kwh).toBe(0);
   });
+  it("integrates one normal hardware upload interval without counting duplicate polls",()=>{
+    const a={ts:1000,p:-600};
+    expect(dischargeInterval(a,{ts:1600,p:-600})[0].kwh).toBeCloseTo(.1);
+    expect(dischargeInterval(a,a)).toEqual([]);
+  });
   it("does not cancel discharge against charging during a zero crossing",()=>{
     const start=ts("2026-09-16T20:00:00+05:00");
     expect(dischargeInterval({ts:start,p:-600},{ts:start+60,p:600})[0].kwh).toBeCloseTo(0.0025);
@@ -37,7 +42,7 @@ describe("battery discharge only, 5PM Pakistan day",()=>{
   });
   it("does not invent energy in gaps, duplicates, reversed timestamps or invalid power",()=>{
     const a={ts:1000,p:-600};
-    for(const b of [{ts:1181,p:-600},{ts:1000,p:-600},{ts:999,p:-600},{ts:1060,p:NaN}]) expect(dischargeInterval(a,b)).toEqual([]);
+    for(const b of [{ts:1901,p:-600},{ts:1000,p:-600},{ts:999,p:-600},{ts:1060,p:NaN}]) expect(dischargeInterval(a,b)).toEqual([]);
   });
   it("rebuilds a discharge-only history from retained signed power",()=>{
     const start=ts("2026-09-16T20:00:00+05:00");

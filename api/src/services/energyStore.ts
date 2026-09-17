@@ -1,4 +1,5 @@
 import { runAutomationTick } from "./automation";
+import { BATTERY_MAX_SAMPLE_GAP_S } from "./telemetry";
 import { getState, setState, acquireTickLock, releaseTickLock, ensureTables } from "./dashboardStore";
 import { BatteryEnergySample, buildDischargeHistory, dischargeInterval, dischargeWindow, localEnergyDate, meterInterval, MeterEnergySample, DAY_S, billingCycleStart, billingCycleEnd } from "./energy";
 import { TuyaStatus, fetchTuyaStatus, fetchTuyaEnergyDay, fetchTuyaEnergyCapabilities, tuyaConfigured } from "./tuya";
@@ -88,7 +89,7 @@ export async function dischargeDays(env:any,now:number,days=7) {
     const coverage=row&&elapsed>0 ? Math.min(100,row.covered_s/elapsed*100) : 0;
     history.push({date:dischargeWindow(start).date,window_start:new Date(start*1000).toISOString(),window_end:new Date((start+DAY_S)*1000).toISOString(),
       discharge_kwh:row?Math.round(row.kwh*1000)/1000:null,coverage_pct:Math.round(coverage*10)/10,
-      partial:!row||elapsed-row.covered_s>180,is_current:i===0,source:"battery_dc_discharge_only"});
+      partial:!row||elapsed-row.covered_s>(i===0?BATTERY_MAX_SAMPLE_GAP_S:180),is_current:i===0,source:"battery_dc_discharge_only"});
   }
   return history;
 }

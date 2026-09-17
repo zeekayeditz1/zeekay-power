@@ -873,7 +873,7 @@
     $("kLoadSub").textContent = bp>20?("battery charging "+fmt(bp,0)+" W"):bp<-20?("battery discharging "+fmt(-bp,0)+" W"):"battery idle";
     const wapdaAvailable = !!s.wapda_available;
     const wapdaActive = !!s.wapda_active;
-    $("kGrid").textContent = s.breaker_online!==true ? "METER OFFLINE" : wapdaAvailable ? (wapdaActive?"AVAILABLE · ACTIVE":"AVAILABLE · OFF") : "UNAVAILABLE · OFF";
+    $("kGrid").textContent = s.breaker_online!==true ? "METER OFFLINE" : wapdaAvailable ? (wapdaActive?"AVAILABLE · ACTIVE":s.wapda_connected?"AVAILABLE · IDLE":"AVAILABLE · OFF") : "UNAVAILABLE · OFF";
     $("kGrid").className = "big wapda-state "+(wapdaActive?"ok":wapdaAvailable?"hot":"bad");
     $("kGridSub").textContent = s.breaker_online!==true ? "" : fmt(s.wapda_voltage,1)+" V · "+fmt(s.wapda_power,0)+" W";
     $("socNow").textContent = fmt(soc,0);
@@ -898,9 +898,9 @@
     $("relayExplicit").hidden=s.relay_known===true;
     tg.hidden=s.relay_known!==true;
     $("relayMode").textContent = s.mode||"auto";
-    $("relayUpd").textContent = ago(s.updated_at);
+    $("relayUpd").textContent = ago(s.relay_updated_at);
     const wapdaStatusEl = $("sgWapda");
-    wapdaStatusEl.textContent = s.breaker_online!==true ? "Unverified · Meter offline" : wapdaAvailable ? (wapdaActive?"Available · Active":"Available · Off") : "Unavailable · Off";
+    wapdaStatusEl.textContent = s.breaker_online!==true ? "Unverified · Meter offline" : wapdaAvailable ? (wapdaActive?"Available · Active":s.wapda_connected?"Available · Idle":"Available · Off") : "Unavailable · Off";
     wapdaStatusEl.className = "sgv "+(wapdaActive?"ok":wapdaAvailable?"hot":"bad");
     if(s.relay_known===true) statusWord($("sgRelay"), on, ["Closed","Open"]); else $("sgRelay").textContent="Unknown";
     statusWord($("sgSolar"), (s.solar_power||0)>5, ["Generating","Idle"]);
@@ -1136,7 +1136,7 @@
     });
     // Draw separate segments for gaps in telemetry.
     ctx.beginPath();
-    points.forEach((p,i)=>{const x=xAt(i),y=yAt(p.soc); i && Date.parse(p.t)-Date.parse(points[i-1].t)<=180000?ctx.lineTo(x,y):ctx.moveTo(x,y);});
+    points.forEach((p,i)=>{const x=xAt(i),y=yAt(p.soc); i && Date.parse(p.t)-Date.parse(points[i-1].t)<=900000?ctx.lineTo(x,y):ctx.moveTo(x,y);});
     ctx.strokeStyle="#37f5b5"; ctx.lineWidth=2.2; ctx.lineJoin="round"; ctx.stroke();
     // last point
     const lx=xAt(points.length-1), ly=yAt(points[points.length-1].soc);

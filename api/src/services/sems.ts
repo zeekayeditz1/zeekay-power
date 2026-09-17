@@ -4,6 +4,7 @@
 | and normalizes the monitor payload into the fields the dashboard + SOC need.
 */
 import { getState, setState } from "./dashboardStore";
+import { SEMS_MAX_SAMPLE_AGE_S } from "./telemetry";
 
 export interface Env {
   SEMS_EMAIL: string;
@@ -112,8 +113,8 @@ export async function fetchSemsSnapshot(env: Env): Promise<SemsSnapshot> {
   const full = inv.invert_full || {};
   const pf = data.powerflow || {};
   const sampleTs=hardwareSampleTime(inv,full),now=Math.floor(Date.now()/1000);
-  await setState(env as any,"sems_telemetry_health",JSON.stringify({sample_ts:sampleTs,device_status:inv.status??null,has_device_time:sampleTs!=null}));
-  if(inv.status===-1||inv.status==="-1"||inv.online===false||sampleTs==null||now-sampleTs>180||sampleTs>now+30) throw new Error("Inverter hardware reading is unavailable or delayed");
+  await setState(env as any,"sems_telemetry_health",JSON.stringify({sample_ts:sampleTs,polled_ts:now,sample_age_s:sampleTs==null?null:now-sampleTs,device_status:inv.status??null,has_device_time:sampleTs!=null}));
+  if(inv.status===-1||inv.status==="-1"||inv.online===false||sampleTs==null||now-sampleTs>SEMS_MAX_SAMPLE_AGE_S||sampleTs>now+30) throw new Error("Inverter hardware reading is unavailable or delayed");
   const power = numOf(full.total_pbattery ?? inv.battery_power);
   return {
     v: numOf(full.vbattery1),

@@ -3,6 +3,7 @@
 | 48V flooded bank (4×12V 140Ah series = 48V,140Ah). Blends coulomb-counting +
 | load-compensated voltage + true-rest anchoring; learns Ri, usable Ah, charge eff.
 */
+import { BATTERY_MAX_SAMPLE_GAP_S } from "./telemetry";
 export const RESTING_CURVE: [number, number][] = [
   [50.80,100],[50.00,90],[49.68,80],[49.28,70],[48.80,60],
   [48.24,50],[47.60,40],[47.00,30],[46.32,20],[45.24,10],[42.00,0],
@@ -26,13 +27,13 @@ const clamp=(x:number,lo:number,hi:number)=>Math.max(lo,Math.min(hi,x));
 
 /*
 | Two consecutive samples are only treated as a continuous stretch of time if
-| they are at most this far apart. The cron ticks every 60s, so 180s tolerates
-| a couple of missed ticks. Anything longer is a real gap (worker downtime, a
+| they are at most this far apart. SEMS hardware uploads can be several
+| minutes apart even though cron polls each minute. Anything longer is a gap (a
 | deploy, a SEMS outage) and contributes ZERO measured time: it must not be
 | integrated into the coulomb count, and it must not count toward the 30-minute
 | "battery has been at rest" condition that triggers a voltage anchor.
 */
-const MAX_CONTIGUOUS_SAMPLE_GAP_S = 180;
+const MAX_CONTIGUOUS_SAMPLE_GAP_S = BATTERY_MAX_SAMPLE_GAP_S;
 export interface SocState {
   soc?:number; c_usable_ah?:number; ri_ohm?:number; eta_charge?:number;
   last_ts?:number|null; rest_run_s?:number; last_anchor_ts?:number;

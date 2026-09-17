@@ -38,6 +38,12 @@ describe("measured battery profile and SOC", () => {
     expect(out.anchored).toBe(false);
     expect(out.rest_run_s).toBe(0);
   });
+  it("counts a normal ten-minute device upload interval once",()=>{
+    const initial=step({}, {v:48,p_chg:-300,ts:1000});
+    const out=step(initial,{v:48,p_chg:-300,ts:1600});
+    expect(out.soc_cc).toBeLessThan(initial.soc_cc!);
+    expect(step(out,{v:48,p_chg:-300,ts:1600})).toEqual(out);
+  });
   it("keeps usable reserve empty after cutoff voltage rebounds", () => {
     let s=step({}, {v:45,p_chg:-300,ts:1000});
     expect(s.usable_soc).toBe(0);

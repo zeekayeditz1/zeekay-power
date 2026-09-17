@@ -1,4 +1,5 @@
 import { runAutomationTick } from "./automation";
+import { BATTERY_MAX_SAMPLE_GAP_S } from "./telemetry";
 import { processControllerCommands } from "./controllerCommands";
 import { recordDischargeSample, recordWapdaSample, dischargeDays } from "./energyStore";
 /*
@@ -49,7 +50,7 @@ export async function runSocTick(env: any) {
     await setState(env, "soc_state", JSON.stringify(out));
 
     // --- history row (voltage, battery power, soc) ---
-    await env.zeekay_power_db.prepare(
+    if(prev.last_ts==null || snap.ts>prev.last_ts) await env.zeekay_power_db.prepare(
       `INSERT OR REPLACE INTO battery_history (ts,v,p,soc_blended,soc_v,soc_cc,bms_soc,anchored)
      VALUES (?,?,?,?,?,?,?,?)`
     ).bind(snap.ts, snap.v, snap.p_chg, r2(out.usable_soc), r2(out.soc_v), r2(out.soc_cc), snap.bms_soc, out.anchored ? 1 : 0).run();
@@ -130,7 +131,7 @@ export async function runSocTick(env: any) {
     let acc: any = {};
     try { const raw = await getState(env, "daily_energy", ""); if (raw) acc = JSON.parse(raw); } catch {}
     if (acc.date !== today) acc = { date: today, pv_peak_w: 0, charge_solar_wh: 0, charge_wapda_wh: 0, last_ts: snap.ts };
-    const dt_h = acc.last_ts ? (snap.ts - acc.last_ts <= 180 ? Math.max(0, snap.ts - acc.last_ts) : 0) / 3600 : 0;
+    const dt_h = acc.last_ts ? (snap.ts - acc.last_ts <= BATTERY_MAX_SAMPLE_GAP_S ? Math.max(0, snap.ts - acc.last_ts) : 0) / 3600 : 0;
     acc.pv_peak_w = Math.max(acc.pv_peak_w || 0, snap.solar_power || 0);
     const bp = snap.p_chg || 0; // +charge / -discharge (W)
     const wapdaOn = gridConnected;
@@ -141,7 +142,7 @@ export async function runSocTick(env: any) {
         acc.charge_solar_wh+=wh*ratio; acc.charge_wapda_wh+=wh*(1-ratio);
       }
     }
-    acc.last_ts = snap.ts;
+    acc.last_ts = Math.max(acc.last_ts??0,snap.ts);
     await setState(env, "daily_energy", JSON.stringify(acc));
 
     // Real total charge/discharge today, straight from the inverter's own counters.
