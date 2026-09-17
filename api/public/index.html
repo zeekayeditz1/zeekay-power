@@ -284,8 +284,6 @@
   .unit-lock-head-actions .toggle{--w:54px;width:54px;height:30px}
   .unit-lock-head-actions .toggle>i{width:22px;height:22px}
   .unit-lock-head-actions .toggle.on>i{left:calc(var(--w) - 25px)}
-  .unit-source{margin-top:12px;padding:10px 12px;border-radius:11px;border:1px solid rgba(57,184,255,.2);background:rgba(57,184,255,.055);font-size:11.5px;color:var(--muted);line-height:1.45}
-  .unit-source b{color:var(--accent-2)}
   /* billing-cycle list */
   .cycles-list{display:grid;gap:10px;margin-top:6px}
   .cycle-row{display:flex;justify-content:space-between;align-items:center;gap:10px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:12px;padding:11px 14px;flex-wrap:wrap}
@@ -452,8 +450,8 @@
   </nav>
 
   <div class="stack">
-    <div class="view-heading view-item view-active" data-view="overview"><h2>Live power overview</h2><p>Your home energy flow, refreshed automatically from the cloud controller.</p></div>
-    <div class="sync-strip view-item view-active" data-view="overview"><span class="sync-dot"></span><span id="syncSummary"><b>Connecting</b> · waiting for the first hardware sample</span></div>
+    <div class="view-heading view-item view-active" data-view="overview"><h2>Live power overview</h2><p>Your home energy at a glance.</p></div>
+    <div class="sync-strip view-item view-active" data-view="overview"><span class="sync-dot"></span><span id="syncSummary"><b>Connecting</b></span></div>
     <div class="card big-card view-item view-active" data-view="overview">
       <div class="bc-head"><h3>Battery reserve</h3><div class="icon i-batt">🔋</div></div>
       <div class="bc-main"><span class="big mono" id="kBatt">--</span><span class="unit">%</span><span class="chip" id="battLabel">—</span></div>
@@ -477,7 +475,7 @@
     <div class="card big-card view-item view-active" data-view="overview">
       <div class="bc-head"><h3>WAPDA · Grid</h3><div class="icon i-grid">🔌</div></div>
       <div class="bc-main"><span class="big wapda-state" id="kGrid">--</span></div>
-      <div class="sub" id="kGridSub">Tuya mains status</div>
+      <div class="sub" id="kGridSub"></div>
     </div>
 
     <div class="card span-full view-item view-active" data-view="overview">
@@ -489,15 +487,15 @@
     </div>
 
     <div class="tiles span-full view-item view-active" data-view="overview">
-      <div class="tile"><div class="tk">WAPDA power (Tuya)</div><div class="tv mono"><span id="tWapdaPower">--</span> <small>W</small></div></div>
-      <div class="tile"><div class="tk">WAPDA voltage (Tuya)</div><div class="tv mono"><span id="tWapdaVolts">--</span> <small>V</small></div></div>
-      <div class="tile"><div class="tk">WAPDA current (Tuya)</div><div class="tv mono"><span id="tWapdaCurrent">--</span> <small>A</small></div></div>
+      <div class="tile"><div class="tk">WAPDA power</div><div class="tv mono"><span id="tWapdaPower">--</span> <small>W</small></div></div>
+      <div class="tile"><div class="tk">WAPDA voltage</div><div class="tv mono"><span id="tWapdaVolts">--</span> <small>V</small></div></div>
+      <div class="tile"><div class="tk">WAPDA current</div><div class="tv mono"><span id="tWapdaCurrent">--</span> <small>A</small></div></div>
       <div class="tile"><div class="tk">Inverter output power</div><div class="tv mono"><span id="tInverterPower">--</span> <small>W</small></div></div>
       <div class="tile"><div class="tk">Inverter output voltage</div><div class="tv mono"><span id="tInverterVolts">--</span> <small>V</small></div></div>
       <div class="tile"><div class="tk">Inverter output current</div><div class="tv mono"><span id="tInverterCurrent">--</span> <small>A</small></div></div>
       <div class="tile"><div class="tk">Frequency</div><div class="tv mono"><span id="tFreq">--</span> <small>Hz</small></div></div>
-      <div class="tile"><div class="tk">Inverter grid counter (display only)</div><div class="tv mono"><span id="tWapdaToday">--</span> <small>kWh</small></div></div>
-      <div class="tile"><div class="tk">WAPDA meter total (Tuya)</div><div class="tv mono"><span id="tMeter">--</span> <small>kWh</small></div></div>
+      <div class="tile"><div class="tk">Inverter grid energy</div><div class="tv mono"><span id="tWapdaToday">--</span> <small>kWh</small></div></div>
+      <div class="tile"><div class="tk">WAPDA meter total</div><div class="tv mono"><span id="tMeter">--</span> <small>kWh</small></div></div>
       <div class="tile"><div class="tk">PV today</div><div class="tv mono"><span id="tPvToday">--</span> <small>kWh</small></div></div>
       <div class="tile"><div class="tk">PV peak today</div><div class="tv mono"><span id="tPvPeak">--</span> <small>W</small></div></div>
     </div>
@@ -516,7 +514,7 @@
     <div class="card">
       <h3>WAPDA Control</h3>
       <div class="relay-row">
-        <div><div class="label">Mains relay</div><div class="desc">Switching talks to Tuya directly. Automatic control keeps running in the cloud whether this page is open or not.</div></div>
+        <div><div class="label">Mains relay</div></div>
         <div class="toggle" id="relayToggle" role="switch" aria-checked="false" tabindex="0"><i></i></div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
@@ -544,14 +542,13 @@
       <div class="cd-sec">
         <div class="cd-row"><span>Discharging</span><span class="faint">energy drawn from the bank</span></div>
         <div class="tile"><div class="tk">Battery discharge · current 5 PM–5 PM day</div><div class="tv mono"><span id="dTotal">--</span> <small>kWh</small></div></div>
-        <div class="cycles-note" id="dWindowSummary">Only energy leaving the battery is counted.</div>
+        <div class="cycles-note" id="dWindowSummary">5 PM–5 PM</div>
       </div>
     </div>
 
     <div class="card span-full view-item" data-view="energy">
       <div class="cd-head"><span class="cd-title">Daily battery discharge history</span><span class="cd-sub">7 completed days + current day · Pakistan time</span></div>
       <div class="cycles-list" id="dischargeList"><div class="cycles-note">Loading…</div></div>
-      <div class="cycles-note">Each day runs from 5 PM to the next 5 PM. Charging is excluded. Energy is estimated from measured battery DC power; incomplete readings are marked.</div>
     </div>
 
     <div class="view-heading view-item" data-view="control"><h2>Automation &amp; control</h2><p>Manage WAPDA safely. Cloud automation keeps working even while the app is closed.</p></div>
@@ -559,7 +556,7 @@
     <div class="card">
       <div class="cd-head"><span class="cd-title">Auto-shift to WAPDA</span><span class="cd-sub">nighttime only (6 PM\u20136 AM) \u00b7 voltage-triggered</span></div>
       <div class="relay-row">
-        <div><div class="label">Enable auto-shift</div><div class="desc">Only arms between 6 PM and 6 AM. Closes the WAPDA relay once battery voltage drops to the trigger below, then rechecks every minute for real grid power before starting the clock \u2014 a closed relay proves nothing if WAPDA itself is down. The charge ends early if PV recovers past the stop threshold, or if the duration runs out.<br><br><b>Relay protection:</b> a cycle never starts if it would have to stop straight away, the relay stays closed for the minimum ON time once switched, and no new cycle can begin until the cooldown has passed. If the breaker is opened by anything else \u2014 the Tuya app, a schedule on the device, or mains cycling it \u2014 the cycle ends instead of switching it back on.</div></div>
+        <div><div class="label">Enable auto-shift</div><div class="desc">Switches to WAPDA at your battery voltage limit between 6 PM and 6 AM. Stops when solar recovers or the timer ends.</div></div>
         <div class="toggle" id="asToggle" role="switch" aria-checked="false" tabindex="0"><i></i></div>
       </div>
       <div class="settings-grid">
@@ -606,19 +603,18 @@
         <div class="tile"><div class="tk">Warning</div><div class="tv" style="font-size:15px">at <span id="ulWarning">5.00</span> kWh</div></div>
         <div class="tile"><div class="tk">Locked until</div><div class="tv" style="font-size:15px" id="ulUnlock">&mdash;</div></div>
       </div>
-      <div class="unit-source"><b>Units source:</b> Tuya cumulative forward-energy meter only. SEMS, inverter counters, and estimated power are never used for this lock.</div>
-      <div class="as-status" id="ulStatus" style="margin-top:14px">Waiting for the next Tuya sample...</div>
+      <div class="as-status" id="ulStatus" style="margin-top:14px">Loading…</div>
     </div>
     </div>
 
     <div class="card span-full view-item" data-view="energy">
       <div class="cd-head"><span class="cd-title">WAPDA usage — billing cycle</span><span class="cd-sub">resets on the 22nd of every month</span></div>
       <div class="cycles-list" id="cyclesList"><div class="cycles-note">Loading…</div></div>
-      <div class="cycles-note" id="billingQuality">WAPDA units come from the Tuya energy meter. Missing history is marked as partial.</div>
+      <div class="cycles-note" id="billingQuality"></div>
     </div>
 
     <div class="card span-full view-item" data-view="control" id="apiKeyCard">
-      <div class="cd-head"><span class="cd-title">API keys</span><span class="cd-sub">programmatic access to this dashboard's API \u2014 for scripts, the WapdaWatch app, or your own tools</span></div>
+      <div class="cd-head"><span class="cd-title">API keys</span><span class="cd-sub">Connect your apps</span></div>
 
       <div class="settings-grid" style="align-items:end">
         <div>
@@ -858,18 +854,18 @@
   }
   function render(s){
     lastStatus = s;
-    const syncText=s.data_available===false?"No hardware sample available":s.stale?"Data is delayed · last sample "+ago(s.updated_at):"Live hardware sample · updated "+ago(s.updated_at);
-    $("syncSummary").innerHTML="<b>"+(s.stale||s.data_available===false?"Attention":"All systems reporting")+"</b> · "+escapeHtml(syncText);
+    const syncText=s.data_available===false?"Waiting for readings":s.stale?"Readings delayed · "+ago(s.updated_at):"Updated "+ago(s.updated_at);
+    $("syncSummary").innerHTML="<b>"+(s.stale||s.data_available===false?"Waiting":"Live")+"</b> · "+escapeHtml(syncText);
     const soc = s.battery_soc!=null && Number.isFinite(Number(s.battery_soc)) ? Number(s.battery_soc) : null;
     $("kBatt").textContent = fmt(soc,0);
     $("battBar").style.width = (soc==null?0:Math.max(0,Math.min(100,soc)))+"%";
     if($("battLabel")) $("battLabel").textContent = s.battery_soc_label||"—";
     $("kBattSub").textContent = "inverter: "+(s.bms_soc!=null?fmt(s.bms_soc,0)+"%":"—")+" · "+(s.battery_voltage!=null?fmt(s.battery_voltage,1)+" V":"— V");
     const minutes=s.battery_runtime_min;
-    $("kBattBackup").textContent = s.stale ? "Backup estimate: stale readings" : s.battery_charging
-      ? "Backup estimate: charging" : minutes!=null
-      ? "Backup: ~"+Math.floor(Math.round(minutes)/60)+"h "+(Math.round(minutes)%60)+"m to 45 V · approximate"+(s.battery_knee_warning?" · final stretch":"")
-      : "Backup estimate: waiting for battery discharge";
+    $("kBattBackup").textContent = s.stale ? "Backup: —" : s.battery_charging
+      ? "Charging" : minutes!=null
+      ? "Backup: ~"+Math.floor(Math.round(minutes)/60)+"h "+(Math.round(minutes)%60)+"m"+(s.battery_knee_warning?" · low battery":"")
+      : "Backup: —";
     $("kSolar").textContent = fmt(s.solar_power,0);
     $("kSolarSub").textContent = "peak "+fmt(s.solar_peak_today,0)+" W · today "+fmt(s.pv_today_kwh,2)+" kWh";
     $("kLoad").textContent = fmt(s.load_power,0);
@@ -879,7 +875,7 @@
     const wapdaActive = !!s.wapda_active;
     $("kGrid").textContent = s.breaker_online!==true ? "METER OFFLINE" : wapdaAvailable ? (wapdaActive?"AVAILABLE · ACTIVE":"AVAILABLE · OFF") : "UNAVAILABLE · OFF";
     $("kGrid").className = "big wapda-state "+(wapdaActive?"ok":wapdaAvailable?"hot":"bad");
-    $("kGridSub").textContent = s.breaker_online!==true ? "WAPDA availability unverified · cached readings hidden" : fmt(s.wapda_voltage,1)+" V · "+fmt(s.wapda_power,0)+" W · Tuya WAPDA meter";
+    $("kGridSub").textContent = s.breaker_online!==true ? "" : fmt(s.wapda_voltage,1)+" V · "+fmt(s.wapda_power,0)+" W";
     $("socNow").textContent = fmt(soc,0);
     if($("tWapdaPower")) $("tWapdaPower").textContent = fmt(s.wapda_power,0);
     if($("tWapdaVolts")) $("tWapdaVolts").textContent = fmt(s.wapda_voltage,1);
@@ -913,8 +909,8 @@
     if($("cTotal")) $("cTotal").textContent = fmt(s.total_charge_kwh,2);
     if($("dTotal")) $("dTotal").textContent = fmt(s.discharge_today_kwh,2);
     if($("dWindowSummary")) $("dWindowSummary").textContent = s.discharge_window_start
-      ? fmtDate(s.discharge_window_start.slice(0,10))+" 5 PM → "+fmtDate(s.discharge_window_end.slice(0,10))+" 5 PM · "+fmt(s.discharge_coverage_pct,1)+"% readings covered"+(s.discharge_partial?" · incomplete record":"")
-      : "Only energy leaving the battery is counted.";
+      ? fmtDate(s.discharge_window_start.slice(0,10))+" 5 PM → "+fmtDate(s.discharge_window_end.slice(0,10))+" 5 PM"+(s.discharge_partial?" · partial":"")
+      : "5 PM–5 PM";
     const cs=s.charge_from_solar_kwh||0, cw=s.charge_from_wapda_kwh||0, ct=cs+cw;
     if($("cdBarSolar")) $("cdBarSolar").style.width = (ct>0?(cs/ct*100):100)+"%";
     if($("cdBarWapda")) $("cdBarWapda").style.width = (ct>0?(cw/ct*100):0)+"%";
@@ -935,28 +931,24 @@
     $("ulRemaining").textContent=fmt(Math.max(0,ulLimit-ulUsed),2);
     $("ulBar").style.width=Math.max(0,Math.min(100,ulLimit>0?ulUsed/ulLimit*100:0))+"%";
     $("ulUnlock").textContent=ulLocked?fmtTime(s.unit_lock_unlock_at):"Not locked";
-    let ulBadge="WAITING", ulMsg="The next Tuya meter window starts at 5 PM.";
+    let ulBadge="WAITING", ulMsg="Starts at 5 PM.";
     if(!ulEnabled){
       ulBadge="OFF";
-      ulMsg="Units Lock is disabled. It is not tracking units and will not turn the WAPDA breaker off. Re-enable it to start a fresh Tuya meter baseline.";
+      ulMsg="Units Lock is off. Manual WAPDA control is available.";
     }else if(ulLocked){
       ulBadge="LOCKED OFF";
-      ulMsg=fmt(ulLimit,2)+" kWh limit reached. WAPDA is forced OFF and auto-shift cannot run, even if the battery reaches 0%, until "+fmtTime(s.unit_lock_unlock_at)+".";
+      ulMsg="Limit reached. WAPDA locked until "+fmtTime(s.unit_lock_unlock_at)+". Turn Units Lock off for manual control.";
     }else if(s.unit_lock_phase==="tracking"){
       ulBadge=ulUsed>=ulWarning?"WARNING":"TRACKING";
       ulMsg=ulUsed>=ulWarning
         ? "Warning: "+fmt(ulUsed,2)+" kWh used. Only "+fmt(Math.max(0,ulLimit-ulUsed),2)+" kWh remains before WAPDA locks OFF."
-        : "Tracking only Tuya's cumulative forward-energy meter from 5 PM to 6 AM. Auto-shift continues normally while usage stays below "+fmt(ulLimit,2)+" kWh.";
+        : "Tracking WAPDA usage · limit "+fmt(ulLimit,2)+" kWh.";
     }else if(s.unit_lock_phase==="release_hold"){
       ulBadge="HOLDING OFF";
       ulMsg="The night window has ended, but the "+fmt(ulLimit,2)+" kWh lock remains enforced until 8 AM.";
     }else if(ulUsed>0){
       ulBadge="WINDOW DONE";
-      ulMsg="The last 5 PM–6 AM window used "+fmt(ulUsed,2)+" kWh and stayed below the limit, so auto-shift was not disabled.";
-    }
-    if(s.unit_lock_phase==="tracking" && s.unit_lock_tracking_since && s.unit_lock_window_start &&
-       new Date(s.unit_lock_tracking_since)-new Date(s.unit_lock_window_start)>120000){
-      ulMsg += " This first window started tracking at "+fmtTime(s.unit_lock_tracking_since)+" after deployment; following windows start exactly at 5 PM.";
+      ulMsg="Last night: "+fmt(ulUsed,2)+" kWh · below limit.";
     }
     $("ulBadge").textContent=ulBadge;
     $("ulStatus").textContent=ulMsg;
@@ -980,7 +972,7 @@
     try{
       const r=await controllerAction("/api/unit-lock",{enabled:nextEnabled,...(validLimit?{limit_kwh:limit}:{})});
       unitLockEnabled=!!r.enabled;
-      toast(!r.enabled?"Units Lock is OFF — manual WAPDA control is available":r.will_lock_next_tick?"Settings saved — lock will apply on the next Tuya meter tick":"Units Lock settings saved","ok");
+      toast(!r.enabled?"Units Lock is off":r.will_lock_next_tick?"Settings saved — locking WAPDA":"Units Lock settings saved","ok");
       await Promise.all([loadStatus(),loadAutoshift(),loadEvents()]);
     }catch(e){ toast(e.message||"Could not save Units Lock settings","err"); if(lastStatus)render(lastStatus); }
     finally{ unitLockBusy=false; $("ulToggle").classList.remove("busy"); btn.disabled=false; btn.textContent=original; }
@@ -1008,7 +1000,7 @@
         ? " · next cycle can start after "+fmtTime(r.cooldown_until) : "";
       let msg;
       if(r.units_locked) msg = "Disabled by Units Lock — "+fmt(r.unit_lock_limit_kwh||6,2)+" kWh was reached, so WAPDA and auto-shift stay OFF until "+fmtTime(r.unit_lock_unlock_at)+", even if the battery becomes empty";
-      else if(r.stopping) msg = "Turning WAPDA OFF — waiting for physical relay confirmation; the cloud controller will retry each minute";
+      else if(r.stopping) msg = "Turning WAPDA off…";
       else if(r.charging) msg = "Charging now — WAPDA confirmed present, held until "+fmtTime(r.until)+" at the latest (triggered at "+fmt(r.trigger_voltage,1)+" V) — ends sooner if PV reaches "+fmt(r.pv_stop_w,0)+" W";
       else if(r.active) msg = "Waiting for WAPDA — relay closed, battery at "+fmt(r.trigger_voltage,1)+" V, rechecking every minute for real grid power (a full "+r.duration_min+"-min charge starts the instant it's confirmed)";
       else if(r.enabled) msg = "Watching, 6 PM–6 AM only — closes WAPDA relay if battery drops to "+fmt(r.threshold_v,1)+" V, waits for real grid before charging, ends early once PV hits "+fmt(r.pv_stop_w,0)+" W";
@@ -1044,14 +1036,14 @@
       return `<div class="cycle-row${c.is_current?' current':''}">
         <div><div class="cr-range">${range}${c.is_current?' · current cycle':''}</div></div>
         <div class="cr-vals">
-          <span>WAPDA <b>${c.wapda_kwh==null?'Awaiting meter history':fmt(c.wapda_kwh,2)+' kWh'}</b>${c.wapda_partial?' · partial record':''}</span>
+          <span>WAPDA <b>${c.wapda_kwh==null?'—':fmt(c.wapda_kwh,2)+' kWh'}</b>${c.wapda_partial?' · partial':''}</span>
           <span>Solar <b>${fmt(c.solar_kwh,2)}</b> kWh</span>
         </div>
       </div>`;
     }).join("");
     $("billingQuality").textContent = sync&&sync.status==="unavailable"
-      ? "Tuya past readings are unavailable. Partial totals include only recorded meter usage; earlier missing units are not estimated."
-      : "WAPDA uses Tuya energy-meter records. Past readings are being recovered; incomplete cycles are marked as partial.";
+      ? "WAPDA history incomplete."
+      : "";
   }
   function fmtDate(d){ if(!d) return "--"; const [y,m,dd]=d.split("-"); const months=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]; return dd+" "+months[parseInt(m,10)-1]; }
   async function loadCycles(){
@@ -1207,7 +1199,7 @@
       const r=await api("/api/history/discharge?days=7");
       $("dischargeList").innerHTML=(r.history||[]).map(day=>`<div class="cycle-row${day.is_current?' current':''}">
         <div><div class="cr-range">${fmtDate(day.date)} 5 PM – ${fmtDate(day.window_end.slice(0,10))} 5 PM${day.is_current?' · current':''}</div>
-          <div class="cycles-note">${fmt(day.coverage_pct,1)}% readings covered${day.partial?' · incomplete record':''}</div></div>
+          ${day.partial?'<div class="cycles-note">Partial</div>':''}</div>
         <div class="cr-vals"><span>Discharged <b>${day.discharge_kwh==null?'No readings':'~'+fmt(day.discharge_kwh,2)+' kWh'}</b></span></div>
       </div>`).join("");
     }catch(e){ $("dischargeList").innerHTML='<div class="cycles-note">Discharge history is temporarily unavailable.</div>'; }
